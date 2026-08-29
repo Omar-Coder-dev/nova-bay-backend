@@ -90,11 +90,6 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
     order.stripeSessionId = session.id;
     await order.save();
 
-    // Clear the cart now that its contents have been converted into an order.
-    // The order itself is the permanent record from this point forward - the
-    // cart's job (holding "what am I thinking about buying") is done.
-
-
     return res.status(200).json({ url: session.url });
   } catch (err) {
     next(err);
