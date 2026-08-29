@@ -6,6 +6,7 @@ import sendEmail from "../utils/sendEmail";
 import otpEmailTemplate from "../utils/emailTemplates/otpEmail";
 import googleClient from "../config/googleAuth";
 import { AuthProvider } from "../constants/enums";
+import { cookieOptions } from "../utils/cookieOptions";
 
 export const register = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -24,13 +25,13 @@ export const register = async (req: Request, res: Response, next: NextFunction) 
     const user = await User.create({ name, email, password });
 
     const token = generateToken(user._id.toString());
+    res.cookie("token", token, cookieOptions);
 
     return res.status(201).json({
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
-      token,
     });
   } catch (err) {
     next(err);
@@ -58,17 +59,22 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     const token = generateToken(user._id.toString());
+    res.cookie("token", token, cookieOptions);
 
     return res.status(200).json({
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
-      token,
     });
   } catch (err) {
     next(err);
   }
+};
+
+export const logout = (req: Request, res: Response) => {
+  res.clearCookie("token", cookieOptions);
+  return res.status(200).json({ message: "Logged out successfully" });
 };
 
 export const getMe = (req: Request, res: Response) => {
@@ -94,24 +100,18 @@ export const forgotPassword = async (req: Request, res: Response, next: NextFunc
 
     const user = await User.findOne({ email });
 
-    // Generic response whether or not the user exists - same reasoning as login,
-    // don't let attackers figure out which emails are registered
     if (!user) {
       return res.status(200).json({ message: "If that email exists, an OTP has been sent" });
     }
 
-    // generate a random 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-    // hash it before saving - never store the raw OTP, same principle as passwords
     const hashedOTP = await bcrypt.hash(otp, 10);
 
     user.resetPasswordOTP = hashedOTP;
-    user.resetPasswordExpires = new Date(Date.now() + 10 * 60 * 1000); // valid for 10 minutes
+    user.resetPasswordExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     await user.save();
 
-    // send the PLAIN otp to the user's email - the hash is only for what we store
     await sendEmail({
       to: user.email,
       subject: "Your Password Reset OTP",
@@ -132,14 +132,12 @@ export const resetPassword = async (req: Request, res: Response, next: NextFunct
       return res.status(400).json({ message: "Email, OTP, and new password are required" });
     }
 
-    // need to explicitly select these since they're select:false by default
     const user = await User.findOne({ email }).select("+resetPasswordOTP +resetPasswordExpires");
 
     if (!user || !user.resetPasswordOTP || !user.resetPasswordExpires) {
       return res.status(400).json({ message: "Invalid or expired OTP" });
     }
 
-    // check expiry first - cheap check, avoids unnecessary bcrypt work if already expired
     if (user.resetPasswordExpires.getTime() < Date.now()) {
       return res.status(400).json({ message: "Invalid or expired OTP" });
     }
@@ -150,10 +148,7 @@ export const resetPassword = async (req: Request, res: Response, next: NextFunct
       return res.status(400).json({ message: "Invalid or expired OTP" });
     }
 
-    // set the new password - the pre('save') hook will hash it automatically
     user.password = newPassword;
-
-    // clear the OTP fields so they can't be reused
     user.resetPasswordOTP = undefined;
     user.resetPasswordExpires = undefined;
 
@@ -164,7 +159,6 @@ export const resetPassword = async (req: Request, res: Response, next: NextFunct
     next(err);
   }
 };
-
 
 export const googleLogin = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -202,13 +196,13 @@ export const googleLogin = async (req: Request, res: Response, next: NextFunctio
     }
 
     const token = generateToken(user._id.toString());
+    res.cookie("token", token, cookieOptions);
 
     return res.status(200).json({
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
-      token,
     });
   } catch (err) {
     next(err);

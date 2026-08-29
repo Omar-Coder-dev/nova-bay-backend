@@ -19,17 +19,21 @@ connectDB();
 
 const app: Express = express();
 
-// Morgan goes first so every request is logged, webhook included
 app.use(morgan('dev'));
 
 // Webhook needs raw body for Stripe signature verification (BEFORE express.json)
 app.use("/api/webhook", webhookRoutes);
 
-app.use(cors());
+// credentials: true lets the browser send/receive cookies cross-origin.
+// origin MUST be an exact URL (not "*") for credentials to work.
+app.use(cors({
+  origin: process.env.CLIENT_URL,
+  credentials: true,
+}));
+
 app.use(express.json());
 app.use(cookieParser());
 
-// Resource Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/products", productRoutes);
@@ -42,7 +46,6 @@ app.get('/', (req: Request, res: Response) => {
   res.send('API is running...');
 });
 
-// GLOBAL ERROR HANDLER - Must be mounted AFTER all routes & BEFORE app.listen
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;

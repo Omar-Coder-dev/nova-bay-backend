@@ -1,0 +1,2741 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: src/**/*
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+src/
+  config/
+    cloudinary.ts
+    db.ts
+    googleAuth.ts
+    stripe.ts
+  constants/
+    enums.ts
+  controllers/
+    adminController.ts
+    authController.ts
+    cartController.ts
+    orderController.ts
+    paymentController.ts
+    productController.ts
+    reviewController.ts
+    userController.ts
+    webhookController.ts
+  middleware/
+    authMiddleware.ts
+    errorMiddleware.ts
+    rateLimiter.ts
+    uploadMiddleware.ts
+  models/
+    Cart.ts
+    Order.ts
+    Product.ts
+    Review.ts
+    User.ts
+  routes/
+    adminRoutes.ts
+    authRoutes.ts
+    cartRoutes.ts
+    orderRoutes.ts
+    productRoutes.ts
+    reviewRoutes.ts
+    userRoutes.ts
+    webhookRoutes.ts
+  utils/
+    emailTemplates/
+      orderEmail.ts
+      otpEmail.ts
+    AppError.ts
+    generateToken.ts
+    seed.ts
+    sendEmail.ts
+  server.ts
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="src/config/cloudinary.ts">
+import { v2 as cloudinary } from "cloudinary";
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+export default cloudinary;
+</file>
+
+<file path="src/config/db.ts">
+import mongoose from 'mongoose';
+
+const connectDB = async (): Promise<void> => {
+  try {
+    const conn = await mongoose.connect(process.env.MONGO_URI as string);
+    console.log(`MongoDB Connected: ${conn.connection.host}`);
+  } catch (error) {
+    console.error(`Error connecting to MongoDB: ${error}`);
+    process.exit(1);
+  }
+};
+
+export default connectDB;
+</file>
+
+<file path="src/config/googleAuth.ts">
+import { OAuth2Client } from "google-auth-library";
+
+// This client is used to VERIFY tokens Google sends us - not to log in
+// ourselves. The frontend talks to Google directly; our backend's only
+// job is confirming a token it receives really came from Google.
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+export default googleClient;
+</file>
+
+<file path="src/config/stripe.ts">
+// src/config/stripe.ts
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
+
+export default stripe;
+</file>
+
+<file path="src/constants/enums.ts">
+export enum UserRole {
+    user = "user",
+    admin = "admin"
+}
+export enum AuthProvider {
+  local = 'local',
+  google = 'google',
+}
+export enum ProductCategory {
+  electronics = 'electronics',
+  clothing = 'clothing',
+  home_and_kitchen = 'home_and_kitchen',
+  beauty = 'beauty',
+  sports = 'sports',
+  books = 'books',
+}
+export enum OrderStatus {
+  pending = 'pending',
+  paid = 'paid',
+  completed = 'completed',
+  cancelled = 'cancelled',
+}
+</file>
+
+<file path="src/controllers/adminController.ts">
+import { Request, Response, NextFunction } from "express";
+import Order from "../models/Order";
+import Product from "../models/Product";
+import User from "../models/User";
+import { OrderStatus } from "../constants/enums";
+
+/**
+ * GET /api/admin/overview
+ * The "at a glance" dashboard summary: total revenue, order counts by
+ * status, and basic store size stats (total products, total users).
+ */
+export const getDashboardOverview = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    // Run all four independent queries at the same time instead of one
+    // after another - none of them depend on each other's results, so
+    // waiting for them sequentially just wastes time.
+    const [revenueResult, statusCounts, totalProducts, totalUsers] = await Promise.all([
+      Order.aggregate([
+        { $match: { status: { $in: [OrderStatus.paid, OrderStatus.completed] } } },
+        {
+          $group: {
+            _id: null,
+            totalRevenue: { $sum: "$totalAmount" },
+            totalOrders: { $sum: 1 },
+          },
+        },
+      ]),
+      Order.aggregate([
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]),
+      Product.countDocuments({ isActive: true }),
+      User.countDocuments(),
+    ]);
+
+    const revenue = revenueResult[0] || { totalRevenue: 0, totalOrders: 0 };
+
+    const ordersByStatus: Record<string, number> = {
+      pending: 0,
+      paid: 0,
+      completed: 0,
+      cancelled: 0,
+    };
+    statusCounts.forEach((entry) => {
+      ordersByStatus[entry._id] = entry.count;
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        totalRevenue: revenue.totalRevenue,
+        totalPaidOrders: revenue.totalOrders,
+        ordersByStatus,
+        totalProducts,
+        totalUsers,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/admin/revenue-by-category
+ * Breaks down revenue per product category, sorted highest to lowest.
+ */
+export const getRevenueByCategory = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const results = await Order.aggregate([
+      { $match: { status: { $in: [OrderStatus.paid, OrderStatus.completed] } } },
+      { $unwind: "$items" },
+      {
+        $lookup: {
+          from: "products",
+          localField: "items.product",
+          foreignField: "_id",
+          as: "productInfo",
+        },
+      },
+      { $unwind: "$productInfo" },
+      {
+        $group: {
+          _id: "$productInfo.category",
+          revenue: { $sum: { $multiply: ["$items.price", "$items.quantity"] } },
+          unitsSold: { $sum: "$items.quantity" },
+        },
+      },
+      { $sort: { revenue: -1 } },
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: results,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/admin/low-stock
+ * Products running low on inventory. Supports filtering by category
+ * and sorting, so a store with many categories can narrow this down.
+ */
+export const getLowStockProducts = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { threshold = 5, category, sortBy = "stock_asc" } = req.query;
+
+    const thresholdNumber = Number(threshold) > 0 ? Number(threshold) : 5;
+
+    const filter: any = {
+      isActive: true,
+      stock: { $lt: thresholdNumber },
+    };
+
+    if (category) {
+      filter.category = category;
+    }
+
+    let sortOption: any = { stock: 1 };
+    if (sortBy === "stock_desc") sortOption = { stock: -1 };
+    if (sortBy === "name") sortOption = { name: 1 };
+    if (sortBy === "price_asc") sortOption = { price: 1 };
+    if (sortBy === "price_desc") sortOption = { price: -1 };
+
+    const products = await Product.find(filter).sort(sortOption);
+
+    return res.status(200).json({
+      success: true,
+      threshold: thresholdNumber,
+      count: products.length,
+      data: products,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
+<file path="src/controllers/authController.ts">
+import { Request, Response, NextFunction } from "express";
+import User from "../models/User";
+import bcrypt from "bcryptjs";
+import generateToken from "../utils/generateToken";
+import sendEmail from "../utils/sendEmail";
+import otpEmailTemplate from "../utils/emailTemplates/otpEmail";
+import googleClient from "../config/googleAuth";
+import { AuthProvider } from "../constants/enums";
+
+export const register = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { name, email, password } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "Name, email, and password are required" });
+    }
+
+    const existingUser = await User.findOne({ email });
+
+    if (existingUser) {
+      return res.status(409).json({ message: "A user with this email already exists" });
+    }
+
+    const user = await User.create({ name, email, password });
+
+    const token = generateToken(user._id.toString());
+
+    return res.status(201).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const login = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
+
+    const user = await User.findOne({ email }).select("+password");
+
+    if (!user || !user.password) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    const token = generateToken(user._id.toString());
+
+    return res.status(200).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getMe = (req: Request, res: Response) => {
+  if (!req.user) {
+    return res.status(401).json({ message: "Not authorized" });
+  }
+
+  return res.status(200).json({
+    _id: req.user._id,
+    name: req.user.name,
+    email: req.user.email,
+    role: req.user.role,
+  });
+};
+
+export const forgotPassword = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const user = await User.findOne({ email });
+
+    // Generic response whether or not the user exists - same reasoning as login,
+    // don't let attackers figure out which emails are registered
+    if (!user) {
+      return res.status(200).json({ message: "If that email exists, an OTP has been sent" });
+    }
+
+    // generate a random 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // hash it before saving - never store the raw OTP, same principle as passwords
+    const hashedOTP = await bcrypt.hash(otp, 10);
+
+    user.resetPasswordOTP = hashedOTP;
+    user.resetPasswordExpires = new Date(Date.now() + 10 * 60 * 1000); // valid for 10 minutes
+
+    await user.save();
+
+    // send the PLAIN otp to the user's email - the hash is only for what we store
+    await sendEmail({
+      to: user.email,
+      subject: "Your Password Reset OTP",
+      html: otpEmailTemplate(otp),
+    });
+
+    return res.status(200).json({ message: "If that email exists, an OTP has been sent" });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const resetPassword = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ message: "Email, OTP, and new password are required" });
+    }
+
+    // need to explicitly select these since they're select:false by default
+    const user = await User.findOne({ email }).select("+resetPasswordOTP +resetPasswordExpires");
+
+    if (!user || !user.resetPasswordOTP || !user.resetPasswordExpires) {
+      return res.status(400).json({ message: "Invalid or expired OTP" });
+    }
+
+    // check expiry first - cheap check, avoids unnecessary bcrypt work if already expired
+    if (user.resetPasswordExpires.getTime() < Date.now()) {
+      return res.status(400).json({ message: "Invalid or expired OTP" });
+    }
+
+    const isMatch = await bcrypt.compare(otp, user.resetPasswordOTP);
+
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid or expired OTP" });
+    }
+
+    // set the new password - the pre('save') hook will hash it automatically
+    user.password = newPassword;
+
+    // clear the OTP fields so they can't be reused
+    user.resetPasswordOTP = undefined;
+    user.resetPasswordExpires = undefined;
+
+    await user.save();
+
+    return res.status(200).json({ message: "Password reset successful" });
+  } catch (err) {
+    next(err);
+  }
+};
+
+
+export const googleLogin = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { idToken } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({ message: "Google ID token is required" });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+
+    if (!payload || !payload.email) {
+      return res.status(400).json({ message: "Invalid Google token" });
+    }
+
+    const { email, name, sub: googleId } = payload;
+
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      user = await User.create({
+        name: name || "Google User",
+        email,
+        authProvider: AuthProvider.google,
+        googleId,
+      });
+    } else if (user.authProvider !== AuthProvider.google) {
+      user.googleId = googleId;
+      await user.save();
+    }
+
+    const token = generateToken(user._id.toString());
+
+    return res.status(200).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
+<file path="src/controllers/cartController.ts">
+import { Request, Response, NextFunction } from "express";
+import mongoose from "mongoose";
+import Cart from "../models/Cart";
+import Product from "../models/Product";
+
+export const getCart = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    let cart = await Cart.findOne({ user: req.user._id }).populate(
+      "items.product",
+      "name price imageUrl stock isActive"
+    );
+
+    // A user might not have a cart document yet (never added anything) -
+    // return an empty cart shape instead of a 404, since "empty cart" is
+    // a normal state, not an error.
+    if (!cart) {
+      cart = await Cart.create({ user: req.user._id, items: [] });
+    }
+
+    return res.status(200).json(cart);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const addToCart = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { productId, quantity } = req.body;
+    const parsedQuantity = Number(quantity);
+
+    if (!mongoose.isValidObjectId(productId) || !parsedQuantity || parsedQuantity < 1) {
+      return res.status(400).json({ message: "Valid productId and quantity (at least 1) are required" });
+    }
+
+    // 1. Verify product exists, is active, and has sufficient stock
+    const product = await Product.findById(productId);
+    if (!product || !product.isActive) {
+      return res.status(404).json({ message: "Product unavailable" });
+    }
+
+    let cart = await Cart.findOne({ user: req.user._id });
+    if (!cart) {
+      cart = await Cart.create({ user: req.user._id, items: [] });
+    }
+
+    const existingItem = cart.items.find(
+      (item) => item.product.toString() === productId
+    );
+
+    const targetQuantity = existingItem 
+      ? existingItem.quantity + parsedQuantity 
+      : parsedQuantity;
+
+    // 2. Prevent adding more items than available stock
+    if (targetQuantity > product.stock) {
+      return res.status(400).json({ 
+        message: `Cannot add requested quantity. Only ${product.stock} items in stock.` 
+      });
+    }
+
+    if (existingItem) {
+      existingItem.quantity = targetQuantity;
+    } else {
+      cart.items.push({ product: productId, quantity: parsedQuantity });
+    }
+
+    await cart.save();
+    const populatedCart = await cart.populate(
+      "items.product",
+      "name price imageUrl stock isActive"
+    );
+
+    return res.status(200).json(populatedCart);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const updateCartItem = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { productId } = req.params;
+    const { quantity } = req.body;
+    const parsedQuantity = Number(quantity);
+
+    if (!parsedQuantity || parsedQuantity < 1) {
+      return res.status(400).json({ message: "Quantity must be at least 1" });
+    }
+
+    const product = await Product.findById(productId);
+    if (!product || !product.isActive) {
+      return res.status(404).json({ message: "Product unavailable" });
+    }
+
+    if (parsedQuantity > product.stock) {
+      return res.status(400).json({
+        message: `Cannot set quantity. Only ${product.stock} items in stock.`,
+      });
+    }
+
+    const cart = await Cart.findOne({ user: req.user._id });
+
+    if (!cart) {
+      return res.status(404).json({ message: "Cart not found" });
+    }
+
+    const item = cart.items.find((item) => item.product.toString() === productId);
+
+    if (!item) {
+      return res.status(404).json({ message: "Item not found in cart" });
+    }
+
+    item.quantity = parsedQuantity;
+    await cart.save();
+
+    const populatedCart = await cart.populate(
+      "items.product",
+      "name price imageUrl stock isActive"
+    );
+
+    return res.status(200).json(populatedCart);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const removeFromCart = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { productId } = req.params;
+
+    const cart = await Cart.findOneAndUpdate(
+      { user: req.user._id },
+      { $pull: { items: { product: productId } } },
+      { new: true }
+    ).populate("items.product", "name price imageUrl stock isActive");
+
+    if (!cart) {
+      return res.status(404).json({ message: "Cart not found" });
+    }
+
+    return res.status(200).json(cart);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const clearCart = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const cart = await Cart.findOneAndUpdate(
+      { user: req.user._id },
+      { items: [] },
+      { new: true }
+    );
+
+    if (!cart) {
+      return res.status(404).json({ message: "Cart not found" });
+    }
+
+    return res.status(200).json(cart);
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
+<file path="src/controllers/orderController.ts">
+import { Request, Response, NextFunction } from "express";
+import mongoose from "mongoose";
+import Order from "../models/Order";
+import Product from "../models/Product";
+import stripe from "../config/stripe";
+import { OrderStatus } from "../constants/enums";
+
+export const getMyOrders = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const orders = await Order.find({ user: req.user._id })
+      .populate("items.product", "name price imageUrl")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      count: orders.length,
+      data: orders,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getOrderById = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid order ID" });
+    }
+
+    const order = await Order.findById(id)
+      .populate("user", "name email")
+      .populate("items.product", "name price imageUrl");
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const isOwner = order.user._id.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === "admin";
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ message: "Not authorized to access this order" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: order,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getAllOrders = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const page = parseInt(req.query.page as string, 10) || 1;
+    const limit = parseInt(req.query.limit as string, 10) || 10;
+    const skip = (page - 1) * limit;
+
+    const filter: Record<string, any> = {};
+
+    if (req.query.status && Object.values(OrderStatus).includes(req.query.status as OrderStatus)) {
+      filter.status = req.query.status;
+    }
+
+    const total = await Order.countDocuments(filter);
+    const orders = await Order.find(filter)
+      .populate("user", "name email")
+      .populate("items.product", "name price imageUrl")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    return res.status(200).json({
+      success: true,
+      count: orders.length,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      data: orders,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  [OrderStatus.pending]: [OrderStatus.paid, OrderStatus.cancelled],
+  [OrderStatus.paid]: [OrderStatus.completed, OrderStatus.cancelled],
+  [OrderStatus.completed]: [],
+  [OrderStatus.cancelled]: [],
+};
+
+export const updateOrderStatus = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status || !Object.values(OrderStatus).includes(status)) {
+      return res.status(400).json({ message: "Invalid order status" });
+    }
+
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const allowedNextStatuses = ALLOWED_TRANSITIONS[order.status];
+
+    if (!allowedNextStatuses.includes(status)) {
+      return res.status(400).json({
+        message: `Cannot change status from "${order.status}" to "${status}"`,
+      });
+    }
+
+    order.status = status as OrderStatus;
+
+    if (status === OrderStatus.completed) {
+      order.deliveredAt = new Date();
+    }
+
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      data: order,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const cancelOrder = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid order ID" });
+    }
+
+    const order = await Order.findById(id);
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const isOwner = order.user.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === "admin";
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ message: "Not authorized to cancel this order" });
+    }
+
+    if (order.status === OrderStatus.cancelled) {
+      return res.status(400).json({ message: "Order is already cancelled" });
+    }
+
+    if (order.status === OrderStatus.completed) {
+      return res.status(400).json({ message: "Cannot cancel a completed order" });
+    }
+
+    if (order.status === OrderStatus.paid && order.stripePaymentId) {
+      await stripe.refunds.create({
+        payment_intent: order.stripePaymentId,
+      });
+    }
+
+    for (const item of order.items) {
+      await Product.findByIdAndUpdate(item.product, {
+        $inc: { stock: item.quantity },
+      });
+    }
+
+    order.status = OrderStatus.cancelled;
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      data: order,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
+<file path="src/controllers/productController.ts">
+import Product from "../models/Product";
+import mongoose from "mongoose";
+import { Request, Response, NextFunction } from "express";
+import cloudinary from "../config/cloudinary";
+
+export const createProduct = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { name, description, price, category, stock, imageUrl } = req.body;
+
+    if (
+      !name ||
+      !description ||
+      price === undefined ||
+      !category ||
+      stock === undefined ||
+      !imageUrl
+    ) {
+      return res.status(400).json({ message: "All product fields are required" });
+    }
+
+    const product = await Product.create({ name, description, price, category, stock, imageUrl });
+
+    return res.status(201).json(product);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const uploadProductImage = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No image file provided" });
+    }
+
+    const uploadResult = await new Promise<any>((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: "nova-bay/products" },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      stream.end(req.file!.buffer);
+    });
+
+    return res.status(200).json({ imageUrl: uploadResult.secure_url });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getProducts = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { category, minPrice, maxPrice, inStock, search, sortBy, minRating, page = 1, limit = 12 } = req.query;
+
+    const filter: any = { isActive: true };
+
+    if (category) filter.category = category;
+
+    if (minPrice !== undefined || maxPrice !== undefined) {
+      filter.price = {};
+      if (minPrice !== undefined && !isNaN(Number(minPrice))) filter.price.$gte = Number(minPrice);
+      if (maxPrice !== undefined && !isNaN(Number(maxPrice))) filter.price.$lte = Number(maxPrice);
+    }
+
+    if (inStock === "true") filter.stock = { $gt: 0 };
+
+    if (search) {
+      const safeSearch = String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.$or = [
+        { name: { $regex: safeSearch, $options: "i" } },
+        { description: { $regex: safeSearch, $options: "i" } },
+      ];
+    }
+
+    if (minRating !== undefined && !isNaN(Number(minRating))) {
+      filter.averageRating = { $gte: Number(minRating) };
+    }
+
+    let sortOption: any = { createdAt: -1 };
+    if (sortBy === "price_asc") sortOption = { price: 1 };
+    if (sortBy === "price_desc") sortOption = { price: -1 };
+    if (sortBy === "rating") sortOption = { averageRating: -1 };
+
+    const pageNumber = Number(page) > 0 ? Number(page) : 1;
+    const limitNumber = Number(limit) > 0 ? Number(limit) : 12;
+    const skip = (pageNumber - 1) * limitNumber;
+
+    const products = await Product.find(filter).skip(skip).limit(limitNumber).sort(sortOption);
+    const total = await Product.countDocuments(filter);
+
+    return res.status(200).json({
+      products,
+      currentPage: pageNumber,
+      totalPages: Math.ceil(total / limitNumber),
+      totalProducts: total,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getProductById = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid product ID" });
+    }
+
+    const product = await Product.findById(id);
+
+    if (!product || !product.isActive) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    return res.status(200).json(product);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const updateProduct = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid product ID" });
+    }
+
+    const updatedProduct = await Product.findOneAndUpdate(
+      { _id: id, isActive: true },
+      req.body,
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!updatedProduct) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    return res.status(200).json({
+      message: "Product updated successfully",
+      product: updatedProduct,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const deleteProduct = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid product ID" });
+    }
+
+    const deletedProduct = await Product.findByIdAndUpdate(
+      id,
+      { isActive: false },
+      { new: true }
+    );
+
+    if (!deletedProduct) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    return res.status(200).json({
+      message: "Product deleted successfully",
+      product: deletedProduct,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getRelatedProducts = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid product ID" });
+    }
+
+    // First, find the product itself - we need to know its category
+    const currentProduct = await Product.findById(id);
+
+    if (!currentProduct || !currentProduct.isActive) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    // Now find other products in the same category, excluding this one
+    const relatedProducts = await Product.find({
+      category: currentProduct.category,
+      _id: { $ne: id }, // $ne means "not equal" - excludes the current product
+      isActive: true,
+    }).limit(4);
+
+    return res.status(200).json(relatedProducts);
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
+<file path="src/controllers/reviewController.ts">
+import { Request, Response, NextFunction } from "express";
+import mongoose from "mongoose";
+import Review from "../models/Review";
+
+export const createReview = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { productId, rating, comment } = req.body;
+
+    if (!productId || !rating || !comment) {
+      return res.status(400).json({ message: "Product ID, rating, and comment are required" });
+    }
+
+    if (!mongoose.isValidObjectId(productId)) {
+      return res.status(400).json({ message: "Invalid product ID" });
+    }
+
+    const review = await Review.create({
+      user: req.user._id,
+      product: productId,
+      rating: Number(rating),
+      comment,
+    });
+
+    await Review.calcAverageRating(productId);
+
+    return res.status(201).json(review);
+  } catch (err: any) {
+    if (err.code === 11000) {
+      return res.status(400).json({ message: "You have already reviewed this product" });
+    }
+    next(err);
+  }
+};
+
+export const getProductReviews = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { productId } = req.params;
+
+    if (!mongoose.isValidObjectId(productId)) {
+      return res.status(400).json({ message: "Invalid product ID" });
+    }
+
+    // Parse and sanitize query parameters for pagination
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit as string) || 10);
+    const skip = (page - 1) * limit;
+
+    const [reviews, totalReviews] = await Promise.all([
+      Review.find({ product: productId })
+        .populate("user", "name")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Review.countDocuments({ product: productId }),
+    ]);
+
+    return res.status(200).json({
+      reviews,
+      currentPage: page,
+      totalPages: Math.ceil(totalReviews / limit),
+      totalReviews,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const updateReview = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { id } = req.params;
+    const { rating, comment } = req.body;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid review ID" });
+    }
+
+    const review = await Review.findById(id);
+
+    if (!review) {
+      return res.status(404).json({ message: "Review not found" });
+    }
+
+    if (review.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Not authorized to edit this review" });
+    }
+
+    if (rating !== undefined) review.rating = Number(rating);
+    if (comment !== undefined) review.comment = comment;
+
+    await review.save();
+    await Review.calcAverageRating(review.product);
+
+    return res.status(200).json(review);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const deleteReview = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid review ID" });
+    }
+
+    const review = await Review.findById(id);
+
+    if (!review) {
+      return res.status(404).json({ message: "Review not found" });
+    }
+
+    if (review.user.toString() !== req.user._id.toString() && req.user.role !== "admin") {
+      return res.status(403).json({ message: "Not authorized to delete this review" });
+    }
+
+    const productId = review.product;
+    await review.deleteOne();
+    await Review.calcAverageRating(productId);
+
+    return res.status(200).json({ message: "Review deleted successfully" });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const upvoteReview = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { id } = req.params;
+
+    const review = await Review.findById(id);
+    if (!review) return res.status(404).json({ message: "Review not found" });
+
+    const userIdStr = req.user._id.toString();
+    const isUpvoted = review.upvotes.some((u) => u.toString() === userIdStr);
+    const isDownvoted = review.downvotes.some((u) => u.toString() === userIdStr);
+
+    if (isUpvoted) {
+      review.upvotes = review.upvotes.filter((u) => u.toString() !== userIdStr);
+    } else {
+      review.upvotes.push(req.user._id);
+      if (isDownvoted) {
+        review.downvotes = review.downvotes.filter((u) => u.toString() !== userIdStr);
+      }
+    }
+
+    await review.save();
+    return res.status(200).json(review);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const downvoteReview = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { id } = req.params;
+
+    const review = await Review.findById(id);
+    if (!review) return res.status(404).json({ message: "Review not found" });
+
+    const userIdStr = req.user._id.toString();
+    const isUpvoted = review.upvotes.some((u) => u.toString() === userIdStr);
+    const isDownvoted = review.downvotes.some((u) => u.toString() === userIdStr);
+
+    if (isDownvoted) {
+      review.downvotes = review.downvotes.filter((u) => u.toString() !== userIdStr);
+    } else {
+      review.downvotes.push(req.user._id);
+      if (isUpvoted) {
+        review.upvotes = review.upvotes.filter((u) => u.toString() !== userIdStr);
+      }
+    }
+
+    await review.save();
+    return res.status(200).json(review);
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
+<file path="src/controllers/userController.ts">
+import { Request, Response, NextFunction } from "express";
+import mongoose from "mongoose";
+import User from "../models/User";
+
+export const getWishlist = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const user = await User.findById(req.user._id).populate(
+      "wishlist",
+      "name price imageUrl averageRating stock"
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.status(200).json(user.wishlist);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const addToWishlist = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { productId } = req.params;
+
+    if (!mongoose.isValidObjectId(productId)) {
+      return res.status(400).json({ message: "Invalid product ID" });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $addToSet: { wishlist: productId } },
+      { new: true }
+    ).populate("wishlist", "name price imageUrl averageRating stock");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.status(200).json(user.wishlist);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const removeFromWishlist = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { productId } = req.params;
+
+    if (!mongoose.isValidObjectId(productId)) {
+      return res.status(400).json({ message: "Invalid product ID" });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $pull: { wishlist: productId } },
+      { new: true }
+    ).populate("wishlist", "name price imageUrl averageRating stock");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.status(200).json(user.wishlist);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Fields a user is allowed to self-edit. Deliberately narrow -
+// NOT using req.body directly, since that would let someone try to
+// sneak in role, email, password, etc. through this endpoint.
+export const updateProfile = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { name, address } = req.body;
+
+    const updates: Record<string, string> = {};
+    if (name !== undefined) updates.name = name;
+    if (address !== undefined) updates.address = address;
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: "No valid fields provided to update" });
+    }
+
+    const user = await User.findByIdAndUpdate(req.user._id, updates, {
+      new: true,
+      runValidators: true,
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.status(200).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      address: user.address,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
+<file path="src/controllers/webhookController.ts">
+import { Request, Response } from "express";
+import Stripe from "stripe";
+import Product from "../models/Product";
+import Cart from "../models/Cart";
+import sendEmail from "../utils/sendEmail";
+import Order from "../models/Order";
+import { OrderStatus } from "../constants/enums";
+import { getOrderEmailTemplate } from "../utils/emailTemplates/orderEmail";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+  apiVersion: "2026-07-29.dahlia",
+});
+
+export const handleStripeWebhook = async (req: Request, res: Response) => {
+  const sig = req.headers["stripe-signature"] as string;
+  let event: Stripe.Event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET as string
+    );
+  } catch (err: any) {
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object as Stripe.Checkout.Session;
+
+    const order = await Order.findOne({ stripeSessionId: session.id });
+
+    if (order && order.status === OrderStatus.pending) {
+      order.status = OrderStatus.paid;
+      order.paidAt = new Date();
+      order.stripePaymentId = session.payment_intent as string;
+      await order.save();
+
+      // Payment actually succeeded now - THIS is the correct moment to clear
+      // the cart, not when checkout started. If we cleared it earlier and the
+      // user abandoned payment, they'd lose their cart contents for nothing.
+      await Cart.findOneAndUpdate({ user: order.user }, { items: [] });
+
+      // NOTE: stock was already decremented in createCheckoutSession at order creation.
+      // Do NOT decrement again here - that would double-charge inventory for one order.
+
+      const populatedOrder = await Order.findById(order._id)
+        .populate("user", "name email")
+        .populate("items.product", "name");
+
+      if (populatedOrder && populatedOrder.user) {
+        const user = populatedOrder.user as any;
+        const items = populatedOrder.items.map((item: any) => ({
+          name: item.product ? item.product.name : "Product",
+          quantity: item.quantity,
+          price: item.price,
+        }));
+
+        const html = getOrderEmailTemplate({
+          userName: user.name,
+          orderId: populatedOrder._id.toString(),
+          items,
+          totalAmount: populatedOrder.totalAmount,
+          shippingAddress: populatedOrder.shippingAddress,
+          estimatedDelivery: populatedOrder.estimatedDelivery,
+        });
+
+        sendEmail({
+          to: user.email,
+          subject: `Order Confirmation #${populatedOrder._id}`,
+          html,
+        }).catch((err) => console.error("Failed to send order email:", err));
+      }
+    }
+  }
+
+  if (event.type === "checkout.session.expired") {
+    const session = event.data.object as Stripe.Checkout.Session;
+
+    const order = await Order.findOne({ stripeSessionId: session.id });
+
+    if (order && order.status === OrderStatus.pending) {
+      // Customer abandoned checkout - give back the stock that was
+      // reserved/decremented when the order was first created.
+      // The cart was never touched, so nothing needs restoring there.
+      for (const item of order.items) {
+        await Product.findByIdAndUpdate(item.product, {
+          $inc: { stock: item.quantity },
+        });
+      }
+
+      order.status = OrderStatus.cancelled;
+      await order.save();
+    }
+  }
+
+  return res.status(200).json({ received: true });
+};
+</file>
+
+<file path="src/middleware/authMiddleware.ts">
+import { Request, Response, NextFunction } from "express";
+import jwt, { JwtPayload } from "jsonwebtoken";
+import User, { IUser } from "../models/User";
+
+// This tells TypeScript that Express's Request object can also carry
+// a "user" property, which we attach ourselves once a token is verified.
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: IUser;
+    }
+  }
+}
+
+export const protect = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    let token: string | undefined;
+
+    // 1. Look for "Authorization: Bearer <token>" in the request headers
+    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+      token = req.headers.authorization.split(" ")[1];
+    }
+
+    // 2. No token at all -> reject immediately
+    if (!token) {
+      return res.status(401).json({ message: "Not authorized, no token provided" });
+    }
+
+    // 3. Verify the token is real and not expired
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as JwtPayload;
+
+    // 4. Look up the user this token belongs to
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      return res.status(401).json({ message: "Not authorized, user no longer exists" });
+    }
+
+    // 5. Attach the user to the request so later handlers can use it
+    req.user = user;
+
+    // 6. Let the request continue
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: "Not authorized, token invalid" });
+  }
+};
+
+export const restrictTo = (...roles: string[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ message: "You do not have permission to perform this action" });
+    }
+    next();
+  };
+};
+</file>
+
+<file path="src/middleware/errorMiddleware.ts">
+import { Request, Response, NextFunction } from "express";
+import { AppError } from "../utils/AppError";
+
+export const errorHandler = (
+  err: any,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  let error = { ...err };
+  error.message = err.message;
+
+  // Log full error in dev console for debugging
+  console.error("Error caught:", err);
+
+  // 1. Invalid MongoDB ObjectId (CastError)
+  if (err.name === "CastError") {
+    const message = `Invalid resource ID: ${err.value}`;
+    error = new AppError(message, 400);
+  }
+
+  // 2. Duplicate Key Error (Code 11000)
+  if (err.code === 11000) {
+    const field = Object.keys(err.keyValue || {})[0] || "field";
+    const message = `Duplicate value for field '${field}'. Please use another value.`;
+    error = new AppError(message, 400);
+  }
+
+  // 3. Mongoose Schema Validation Error
+  if (err.name === "ValidationError") {
+    const message = Object.values(err.errors)
+      .map((val: any) => val.message)
+      .join(", ");
+    error = new AppError(message, 400);
+  }
+
+  // 4. Invalid JWT Token
+  if (err.name === "JsonWebTokenError") {
+    error = new AppError("Invalid token. Please log in again.", 401);
+  }
+
+  // 5. Expired JWT Token
+  if (err.name === "TokenExpiredError") {
+    error = new AppError("Your session has expired. Please log in again.", 401);
+  }
+
+  // Send formatted JSON response
+  const statusCode = error.statusCode || 500;
+  const responseMessage = error.isOperational
+    ? error.message
+    : "Internal Server Error";
+
+  return res.status(statusCode).json({
+    success: false,
+    error: responseMessage,
+  });
+};
+</file>
+
+<file path="src/middleware/rateLimiter.ts">
+import rateLimit from "express-rate-limit";
+
+export const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 attempts per window per IP
+  message: { message: "Too many attempts. Please try again in 15 minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+</file>
+
+<file path="src/middleware/uploadMiddleware.ts">
+import multer from "multer";
+import path from "path";
+
+const storage = multer.memoryStorage();
+
+export const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|webp|gif/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = file.mimetype.startsWith("image/") || allowedTypes.test(file.mimetype);
+
+    if (extname || mimetype) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed!"));
+    }
+  },
+});
+</file>
+
+<file path="src/models/Cart.ts">
+import mongoose, { Document, Schema } from "mongoose";
+
+export interface ICartItem {
+  product: mongoose.Types.ObjectId;
+  quantity: number;
+}
+
+export interface ICart extends Document {
+  user: mongoose.Types.ObjectId;
+  items: ICartItem[];
+}
+
+const cartItemSchema = new Schema<ICartItem>(
+  {
+    product: {
+      type: Schema.Types.ObjectId,
+      ref: "Product",
+      required: true,
+    },
+    quantity: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+  },
+  { _id: false }
+);
+
+const cartSchema = new Schema<ICart>(
+  {
+    user: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      unique: true, // one cart per user - not one row per item
+    },
+    items: [cartItemSchema],
+  },
+  { timestamps: true }
+);
+
+const Cart = mongoose.model<ICart>("Cart", cartSchema);
+
+export default Cart;
+</file>
+
+<file path="src/models/Order.ts">
+import mongoose, { Document, Schema } from "mongoose";
+import { OrderStatus } from "../constants/enums";
+
+// Describes a single line item inside an order (one product + how many + price paid)
+export interface IOrderItem {
+  product: mongoose.Types.ObjectId;
+  quantity: number;
+  price: number; // price AT THE TIME OF PURCHASE - not the live product price
+}
+
+// Describes the whole order
+export interface IOrder extends Document {
+  user: mongoose.Types.ObjectId;
+  items: IOrderItem[];
+  totalAmount: number;
+  status: OrderStatus;
+  shippingAddress: string;
+  estimatedDelivery: Date;
+  stripePaymentId?: string; // optional - only exists once payment is linked
+  paidAt?: Date; // when payment actually cleared - separate from updatedAt, which changes on ANY edit
+  deliveredAt?: Date; // when the order was actually marked completed
+  stripeSessionId?: string;
+}
+
+// A separate small schema just for one item inside the order's item list.
+// We need this because each item has multiple fields (not just one ID like wishlist did).
+const orderItemSchema = new Schema<IOrderItem>(
+  {
+    product: {
+      type: Schema.Types.ObjectId,
+      ref: "Product",
+      required: true,
+    },
+    quantity: {
+      type: Number,
+      required: true,
+      min: 1, // can't order zero or negative quantity
+    },
+    price: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+  },
+  {
+    _id: false, // don't generate an extra ID for each item - we never need to address one individually
+  },
+);
+
+const orderSchema = new Schema<IOrder>(
+  {
+    user: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: [true, "User reference is required"],
+    },
+    items: {
+      type: [orderItemSchema], // an array where each entry follows the item schema above
+      required: [true, "Order items are required"],
+      validate: [
+        (val: IOrderItem[]) => val.length > 0, // blocks creating an order with zero items
+        "Order must contain at least one item",
+      ],
+    },
+    totalAmount: {
+      type: Number,
+      required: [true, "Total amount is required"],
+      min: [0, "Total amount cannot be negative"],
+    },
+    status: {
+      type: String,
+      enum: Object.values(OrderStatus),
+      default: OrderStatus.pending,
+    },
+    shippingAddress: {
+      type: String,
+      required: [true, "Shipping address is required"],
+      trim: true,
+    },
+    estimatedDelivery: {
+      type: Date,
+      // using a FUNCTION here, not a fixed value - otherwise every order would get
+      // frozen to the same date (whatever time the server first started up)
+      default: () => new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
+    },
+    stripePaymentId: {
+      type: String,
+      trim: true,
+    },
+    stripeSessionId: {
+      type: String,
+      trim: true,
+    },
+    paidAt: {
+      type: Date,
+      // no default - stays unset until the controller explicitly sets it
+      // at the moment status actually flips to "paid"
+    },
+    deliveredAt: {
+      type: Date,
+      // same idea - set explicitly when status flips to "completed"
+    },
+  },
+  { timestamps: true },
+);
+
+const Order = mongoose.model<IOrder>("Order", orderSchema);
+
+export default Order;
+</file>
+
+<file path="src/models/Product.ts">
+import mongoose, { Document, Schema } from 'mongoose';
+import { ProductCategory } from '../constants/enums';
+
+// Describes what a product looks like in our code.
+export interface IProduct extends Document {
+  name: string;
+  description: string;
+  price: number;
+  category: ProductCategory;
+  stock: number;
+  imageUrl: string;
+  averageRating: number; // calculated from reviews, not set manually
+  numReviews: number; // calculated from reviews, not set manually
+  isActive: boolean; // lets us "hide" a product without deleting it (protects order history)
+}
+
+const productSchema = new Schema<IProduct>(
+  {
+    name: {
+      type: String,
+      required: [true, 'Product name is required'],
+      trim: true,
+    },
+    description: {
+      type: String,
+      required: [true, 'Product description is required'],
+      trim: true,
+    },
+    price: {
+      type: Number,
+      required: [true, 'Price is required'],
+      min: [0, 'Price cannot be negative'], // stops accidental negative prices
+    },
+    category: {
+      type: String,
+      enum: Object.values(ProductCategory), // only allows values from our category list
+      required: [true, 'Category is required'],
+    },
+    stock: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: [0, 'Stock cannot be negative'], // stops stock from going below zero
+    },
+    imageUrl: {
+      type: String,
+      required: [true, 'Image URL is required'],
+    },
+    averageRating: {
+      type: Number,
+      default: 0, // starts at 0, gets recalculated whenever a review is added/removed
+    },
+    numReviews: {
+      type: Number,
+      default: 0, // starts at 0, gets recalculated whenever a review is added/removed
+    },
+    isActive: {
+      type: Boolean,
+      default: true, // deleting a product would break past orders that reference it,
+      // so "deleting" in the admin panel should really just flip this to false
+    },
+  },
+  { timestamps: true }
+);
+
+const Product = mongoose.model<IProduct>('Product', productSchema);
+
+export default Product;
+</file>
+
+<file path="src/models/Review.ts">
+import mongoose, { Document, Schema, Model } from "mongoose";
+import Product from "./Product";
+
+// Describes what a review looks like in our code.
+export interface IReview extends Document {
+  user: mongoose.Types.ObjectId; // who wrote the review
+  product: mongoose.Types.ObjectId; // which product it's about
+  rating: number;
+  comment: string;
+  upvotes: mongoose.Types.ObjectId[]; // list of user IDs who upvoted
+  downvotes: mongoose.Types.ObjectId[]; // list of user IDs who downvoted
+}
+
+export interface IReviewModel extends Model<IReview> {
+  calcAverageRating(productId: mongoose.Types.ObjectId | string): Promise<void>;
+}
+
+const reviewSchema = new Schema<IReview, IReviewModel>(
+  {
+    user: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: [true, "User reference is required"],
+    },
+    product: {
+      type: Schema.Types.ObjectId,
+      ref: "Product",
+      required: [true, "Product reference is required"],
+    },
+    rating: {
+      type: Number,
+      required: [true, "Rating is required"],
+      min: [1, "Rating must be at least 1"],
+      max: [5, "Rating cannot exceed 5"], // standard 1-5 star range
+    },
+    comment: {
+      type: String,
+      required: [true, "Comment is required"],
+      trim: true,
+    },
+    upvotes: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    downvotes: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+  },
+  { timestamps: true }
+);
+
+// Makes sure the SAME user can't review the SAME product more than once.
+// It's the combination of both fields together that must be unique, not each one alone.
+reviewSchema.index({ user: 1, product: 1 }, { unique: true });
+
+reviewSchema.statics.calcAverageRating = async function (
+  productId: mongoose.Types.ObjectId | string
+) {
+  const stats = await this.aggregate([
+    { $match: { product: new mongoose.Types.ObjectId(productId.toString()) } },
+    {
+      $group: {
+        _id: "$product",
+        numReviews: { $sum: 1 },
+        averageRating: { $avg: "$rating" },
+      },
+    },
+  ]);
+
+  if (stats.length > 0) {
+    await Product.findByIdAndUpdate(productId, {
+      averageRating: Math.round(stats[0].averageRating * 10) / 10,
+      numReviews: stats[0].numReviews,
+    });
+  } else {
+    await Product.findByIdAndUpdate(productId, {
+      averageRating: 0,
+      numReviews: 0,
+    });
+  }
+};
+
+const Review = mongoose.model<IReview, IReviewModel>("Review", reviewSchema);
+
+export default Review;
+</file>
+
+<file path="src/models/User.ts">
+import mongoose, { Document, Schema } from "mongoose";
+import bcrypt from "bcryptjs";
+import { UserRole, AuthProvider } from "../constants/enums";
+
+// This describes what a user looks like in our code.
+// "extends Document" just means it also gets the normal Mongoose stuff, like an ID.
+export interface IUser extends Document {
+  name: string;
+  email: string;
+  password?: string; // the "?" means this can be missing - Google users won't have one
+  role: UserRole;
+  authProvider: AuthProvider;
+  googleId?: string; // only exists if the user signed up with Google
+  wishlist: mongoose.Types.ObjectId[]; // list of product IDs this user has saved
+  address?: string; // optional saved shipping address, editable on the profile page
+  resetPasswordOTP?: string;
+  resetPasswordExpires?: Date;
+}
+
+const userSchema = new Schema<IUser>(
+  {
+    name: {
+      type: String,
+      required: [true, "Name is required"],
+      trim: true, // removes extra spaces at the start/end
+    },
+    email: {
+      type: String,
+      required: [true, "Email is required"],
+      unique: true, // no two users can have the same email
+      lowercase: true, // turns "A@B.com" into "a@b.com" automatically
+      trim: true,
+    },
+    password: {
+      type: String,
+      select: false, // hides this field by default - we only ask for it explicitly, like during login
+    },
+    role: {
+      type: String,
+      enum: Object.values(UserRole), // only allows "user" or "admin"
+      default: UserRole.user,
+    },
+    authProvider: {
+      type: String,
+      enum: Object.values(AuthProvider), // only allows "local" or "google"
+      default: AuthProvider.local,
+    },
+    googleId: {
+      type: String,
+      unique: true,
+      sparse: true, // lets many users have no googleId at all without triggering a duplicate error
+    },
+    wishlist: [
+      {
+        type: Schema.Types.ObjectId, // just stores the product's ID, not the full product
+        ref: "Product", // tells Mongoose which collection this ID points to
+      },
+    ],
+    address: {
+      type: String,
+      trim: true,
+      // no "required" - not every user will have set one yet
+    },
+    resetPasswordOTP: {
+      type: String,
+      select: false, // same reasoning as password - never returned by default
+    },
+    resetPasswordExpires: {
+      type: Date,
+    },
+  },
+  { timestamps: true }, // automatically adds "createdAt" and "updatedAt" dates
+);
+// Runs automatically right before a user gets saved to the database.
+// Makes sure the password is never stored as plain text.
+userSchema.pre("save", async function (next) {
+  // if there's no password (Google users) or it wasn't changed, skip hashing
+  if (!this.isModified("password") || !this.password) {
+    return next();
+  }
+  this.password = await bcrypt.hash(this.password, 10);
+  next();
+});
+// Turns the schema into something we can actually use to talk to MongoDB.
+// This also creates the "users" collection in the database.
+const User = mongoose.model<IUser>("User", userSchema);
+
+export default User;
+</file>
+
+<file path="src/routes/adminRoutes.ts">
+import { Router } from "express";
+import {
+  getDashboardOverview,
+  getRevenueByCategory,
+  getLowStockProducts,
+} from "../controllers/adminController";
+import { protect, restrictTo } from "../middleware/authMiddleware";
+import { UserRole } from "../constants/enums";
+
+const router = Router();
+
+// Every route in this file is admin-only, no exceptions -
+// this is store-wide revenue and business data, never for regular users.
+router.use(protect, restrictTo(UserRole.admin));
+
+router.get("/overview", getDashboardOverview);
+router.get("/revenue-by-category", getRevenueByCategory);
+router.get("/low-stock", getLowStockProducts);
+
+export default router;
+</file>
+
+<file path="src/routes/authRoutes.ts">
+import { Router } from "express";
+import { forgotPassword, getMe, googleLogin, login, register, resetPassword } from "../controllers/authController";
+import { protect } from "../middleware/authMiddleware";
+import { authLimiter } from "../middleware/rateLimiter";
+
+const router = Router();
+
+router.post("/register", register);
+router.post("/login", authLimiter, login);
+router.post("/google", authLimiter, googleLogin);
+router.post("/forgot-password", authLimiter, forgotPassword);
+router.get("/me", protect, getMe);
+router.post("/reset-password", authLimiter, resetPassword);
+
+export default router;
+</file>
+
+<file path="src/routes/cartRoutes.ts">
+import { Router } from "express";
+import {
+  getCart,
+  addToCart,
+  updateCartItem,
+  removeFromCart,
+  clearCart,
+} from "../controllers/cartController";
+import { protect } from "../middleware/authMiddleware";
+
+const router = Router();
+
+router.use(protect);
+
+router.get("/", getCart);
+router.post("/", addToCart);
+router.patch("/:productId", updateCartItem);
+router.delete("/:productId", removeFromCart);
+router.delete("/", clearCart);
+
+export default router;
+</file>
+
+<file path="src/routes/orderRoutes.ts">
+import { Router } from "express";
+import { createCheckoutSession } from "../controllers/paymentController";
+import { protect, restrictTo } from "../middleware/authMiddleware";
+import {
+  getMyOrders,
+  getOrderById,
+  getAllOrders,
+  updateOrderStatus,
+  cancelOrder,
+} from "../controllers/orderController";
+import { UserRole } from "../constants/enums";
+
+const router = Router();
+
+// Protect all routes below
+router.use(protect);
+
+// Checkout route
+router.post("/create-checkout-session", createCheckoutSession);
+
+// User order history & management
+router.get("/my-orders", getMyOrders);
+router.get("/:id", getOrderById);
+router.patch("/:id/cancel", cancelOrder);
+
+// Admin-only order management
+router.get("/", restrictTo(UserRole.admin), getAllOrders);
+router.patch("/:id/status", restrictTo(UserRole.admin), updateOrderStatus);
+
+export default router;
+</file>
+
+<file path="src/routes/productRoutes.ts">
+import { Router } from "express";
+import { 
+  createProduct, 
+  deleteProduct, 
+  getProductById, 
+  getProducts, 
+  getRelatedProducts, 
+  updateProduct,
+  uploadProductImage 
+} from "../controllers/productController";
+import { protect, restrictTo } from "../middleware/authMiddleware";
+import { upload } from "../middleware/uploadMiddleware";
+
+const router = Router();
+
+router.get("/", getProducts);
+router.post("/upload-image", protect, restrictTo("admin"), upload.single("image"), uploadProductImage);
+router.get("/:id", getProductById);
+router.post("/", protect, restrictTo("admin"), createProduct);
+router.patch("/:id", protect, restrictTo("admin"), updateProduct);
+router.delete("/:id", protect, restrictTo("admin"), deleteProduct);
+router.get("/:id/related", getRelatedProducts);
+export default router;
+</file>
+
+<file path="src/routes/reviewRoutes.ts">
+import { Router } from "express";
+import {
+  createReview,
+  getProductReviews,
+  updateReview,
+  deleteReview,
+  upvoteReview,
+  downvoteReview,
+} from "../controllers/reviewController";
+import { protect } from "../middleware/authMiddleware";
+
+const router = Router();
+
+router.get("/product/:productId", getProductReviews);
+
+router.post("/", protect, createReview);
+router.patch("/:id", protect, updateReview);
+router.delete("/:id", protect, deleteReview);
+
+router.patch("/:id/upvote", protect, upvoteReview);
+router.patch("/:id/downvote", protect, downvoteReview);
+
+export default router;
+</file>
+
+<file path="src/routes/userRoutes.ts">
+import { Router } from "express";
+import {
+  getWishlist,
+  addToWishlist,
+  removeFromWishlist,
+  updateProfile,
+} from "../controllers/userController";
+import { protect } from "../middleware/authMiddleware";
+
+const router = Router();
+
+router.use(protect);
+
+router.patch("/profile", updateProfile);
+
+router.get("/wishlist", getWishlist);
+router.post("/wishlist/:productId", addToWishlist);
+router.delete("/wishlist/:productId", removeFromWishlist);
+
+export default router;
+</file>
+
+<file path="src/routes/webhookRoutes.ts">
+import { Router } from "express";
+import express from "express";
+import { handleStripeWebhook } from "../controllers/webhookController";
+
+const router = Router();
+
+router.post("/", express.raw({ type: "application/json" }), handleStripeWebhook);
+
+export default router;
+</file>
+
+<file path="src/utils/emailTemplates/orderEmail.ts">
+export interface OrderEmailData {
+  userName: string;
+  orderId: string;
+  items: Array<{ name: string; quantity: number; price: number }>;
+  totalAmount: number;
+  shippingAddress: string;
+  estimatedDelivery: Date;
+}
+
+export const getOrderEmailTemplate = (data: OrderEmailData): string => {
+  const formattedDeliveryDate = new Date(data.estimatedDelivery).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  const itemsList = data.items
+    .map(
+      (item) => `
+        <tr>
+          <td style="padding: 14px 0; border-bottom: 1px solid #f0f0f0; color: #374151; font-size: 14px;">${item.name}</td>
+          <td style="padding: 14px 0; border-bottom: 1px solid #f0f0f0; color: #9ca3af; font-size: 14px; text-align: center;">×${item.quantity}</td>
+          <td style="padding: 14px 0; border-bottom: 1px solid #f0f0f0; color: #374151; font-size: 14px; text-align: right; font-weight: 600;">$${(item.price * item.quantity).toFixed(2)}</td>
+        </tr>`
+    )
+    .join("");
+
+  return `
+  <div style="background-color: #f4f4f7; padding: 40px 20px; font-family: 'Segoe UI', Helvetica, Arial, sans-serif;">
+    <div style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.06);">
+
+      <!-- Header -->
+      <div style="background-color: #6366f1; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 36px 40px; text-align: center;">
+        <div style="width: 56px; height: 56px; background-color: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 16px; line-height: 56px; color: #ffffff; font-size: 28px; font-weight: bold;">✓</div>
+        <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em;">
+          Order Confirmed
+        </h1>
+        <p style="color: rgba(255,255,255,0.85); margin: 6px 0 0; font-size: 14px;">
+          Order #${data.orderId}
+        </p>
+      </div>
+
+      <!-- Content Body -->
+      <div style="padding: 40px;">
+        <p style="color: #4b5563; font-size: 15px; line-height: 1.6; margin: 0 0 28px 0;">
+          Hi <strong style="color: #1f2937;">${data.userName}</strong>, thanks for your purchase — we're getting your order ready.
+        </p>
+
+        <!-- Order Items Table -->
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 8px;">
+          <thead>
+            <tr>
+              <th style="text-align: left; padding-bottom: 10px; border-bottom: 2px solid #f0f0f0; color: #9ca3af; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Item</th>
+              <th style="text-align: center; padding-bottom: 10px; border-bottom: 2px solid #f0f0f0; color: #9ca3af; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Qty</th>
+              <th style="text-align: right; padding-bottom: 10px; border-bottom: 2px solid #f0f0f0; color: #9ca3af; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Price</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemsList}
+          </tbody>
+        </table>
+
+        <!-- Total Paid -->
+        <table style="width: 100%; margin-top: 20px;">
+          <tr>
+            <td style="color: #6b7280; font-size: 14px;">Total Paid</td>
+            <td style="color: #6366f1; font-size: 24px; font-weight: 700; text-align: right;">$${data.totalAmount.toFixed(2)}</td>
+          </tr>
+        </table>
+
+        <!-- Details Box (Estimated Delivery & Shipping Address) -->
+        <div style="background-color: #f5f3ff; border-radius: 12px; padding: 20px; margin-top: 28px;">
+          <div style="margin-bottom: 16px;">
+            <p style="margin: 0 0 4px; color: #6366f1; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Estimated Delivery</p>
+            <p style="margin: 0; color: #1f2937; font-size: 15px; font-weight: 600;">${formattedDeliveryDate}</p>
+          </div>
+          <div>
+            <p style="margin: 0 0 4px; color: #6366f1; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Shipping To</p>
+            <p style="margin: 0; color: #4b5563; font-size: 14px; line-height: 1.5;">${data.shippingAddress}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div style="background-color: #fafafa; padding: 20px 40px; text-align: center; border-top: 1px solid #f0f0f0;">
+        <p style="color: #b0b0b0; font-size: 12px; margin: 0;">
+          Questions? Reply directly to this email.<br/>
+          &copy; ${new Date().getFullYear()} Nova Bay. All rights reserved.
+        </p>
+      </div>
+
+    </div>
+  </div>
+  `;
+};
+</file>
+
+<file path="src/utils/emailTemplates/otpEmail.ts">
+const otpEmailTemplate = (otp: string): string => {
+  return `
+  <div style="background-color: #f4f4f7; padding: 40px 20px; font-family: 'Segoe UI', Helvetica, Arial, sans-serif;">
+    <div style="max-width: 480px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.06);">
+      
+      <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 32px 40px; text-align: center;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em;">
+          Password Reset
+        </h1>
+      </div>
+
+      <div style="padding: 40px;">
+        <p style="color: #4b5563; font-size: 15px; line-height: 1.6; margin: 0 0 28px 0; text-align: center;">
+          We received a request to reset your password. Enter the code below to continue.
+        </p>
+
+        <div style="background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 28px;">
+          <span style="font-size: 36px; font-weight: 700; letter-spacing: 10px; color: #6366f1; font-family: 'Courier New', monospace;">
+            ${otp}
+          </span>
+        </div>
+
+        <p style="color: #9ca3af; font-size: 13px; text-align: center; margin: 0 0 4px 0;">
+          This code expires in <strong style="color: #6b7280;">10 minutes</strong>.
+        </p>
+        <p style="color: #9ca3af; font-size: 13px; text-align: center; margin: 0;">
+          Didn't request this? You can safely ignore this email.
+        </p>
+      </div>
+
+      <div style="background-color: #fafafa; padding: 20px 40px; text-align: center; border-top: 1px solid #f0f0f0;">
+        <p style="color: #b0b0b0; font-size: 12px; margin: 0;">
+          &copy; ${new Date().getFullYear()} Nova Bay. All rights reserved.
+        </p>
+      </div>
+
+    </div>
+  </div>
+  `;
+};
+
+export default otpEmailTemplate;
+</file>
+
+<file path="src/utils/AppError.ts">
+export class AppError extends Error {
+  public statusCode: number;
+  public isOperational: boolean;
+
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.statusCode = statusCode;
+    // Identifies this as a operational error (user input / business logic), not a code crash
+    this.isOperational = true;
+
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+</file>
+
+<file path="src/utils/generateToken.ts">
+import jwt, { SignOptions } from 'jsonwebtoken';
+
+// Creates a signed JWT for a given user ID.
+// The frontend will store this token and send it back on future requests
+// so the server can verify who's making the request without a DB lookup every time.
+const generateToken = (userId: string): string => {
+  return jwt.sign(
+    { id: userId }, // payload: the data we're encoding inside the token
+    process.env.JWT_SECRET as string, // secret used to sign the token (env vars are typed as "string | undefined" by default, so we assert it's a string since we know it's set)
+    {
+      // expiresIn also comes from .env as a generic string, but jsonwebtoken's types want
+      // a more specific format (like "7d"). SignOptions['expiresIn'] grabs the exact type
+      // that field expects, so we can safely tell TypeScript "trust this value."
+      expiresIn: process.env.JWT_EXPIRES_IN as SignOptions['expiresIn'],
+    }
+  );
+};
+
+export default generateToken;
+</file>
+
+<file path="src/utils/seed.ts">
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+import Product from '../models/Product';
+import User from '../models/User';
+import { ProductCategory, UserRole } from '../constants/enums';
+
+dotenv.config();
+
+const products = [
+  { name: "Wireless Bluetooth Headphones", description: "Over-ear headphones with noise cancellation and 30-hour battery life.", price: 79.99, category: ProductCategory.electronics, stock: 25, imageUrl: "https://images.unsplash.com/photo-1505740420928-5e560c06d30e" },
+  { name: "Smartwatch Series 5", description: "Fitness tracking, heart rate monitor, and smartphone notifications.", price: 199.99, category: ProductCategory.electronics, stock: 15, imageUrl: "https://images.unsplash.com/photo-1523275335684-37898b6baf30" },
+  { name: "Portable Power Bank 20000mAh", description: "Fast-charging power bank with dual USB ports.", price: 34.99, category: ProductCategory.electronics, stock: 40, imageUrl: "https://images.unsplash.com/photo-1609091839311-d5365f9ff1c5" },
+  { name: "Mechanical Keyboard RGB", description: "Tactile mechanical keyboard with customizable RGB lighting.", price: 89.99, category: ProductCategory.electronics, stock: 20, imageUrl: "https://images.unsplash.com/photo-1541140532154-b024d705b90a" },
+
+  { name: "Men's Classic Denim Jacket", description: "Timeless denim jacket, regular fit, 100% cotton.", price: 59.99, category: ProductCategory.clothing, stock: 30, imageUrl: "https://images.unsplash.com/photo-1551028719-00167b16eac5" },
+  { name: "Women's Running Leggings", description: "High-waisted, moisture-wicking leggings for workouts.", price: 34.99, category: ProductCategory.clothing, stock: 45, imageUrl: "https://images.unsplash.com/photo-1506629082955-511b1aa562c8" },
+  { name: "Unisex Cotton Hoodie", description: "Soft fleece-lined hoodie, available in multiple colors.", price: 44.99, category: ProductCategory.clothing, stock: 35, imageUrl: "https://images.unsplash.com/photo-1556821840-3a63f95609a7" },
+
+  { name: "Ceramic Non-Stick Cookware Set", description: "10-piece cookware set with ceramic non-stick coating.", price: 129.99, category: ProductCategory.home_and_kitchen, stock: 12, imageUrl: "https://images.unsplash.com/photo-1584990347449-a30f2b1e5e5f" },
+  { name: "Electric Kettle 1.7L", description: "Fast-boil stainless steel electric kettle with auto shut-off.", price: 29.99, category: ProductCategory.home_and_kitchen, stock: 28, imageUrl: "https://images.unsplash.com/photo-1585515320310-259814833e62" },
+  { name: "Memory Foam Pillow Set", description: "Set of 2 cervical support pillows for better sleep.", price: 39.99, category: ProductCategory.home_and_kitchen, stock: 22, imageUrl: "https://images.unsplash.com/photo-1584100936595-c0654b55a2e2" },
+
+  { name: "Vitamin C Serum", description: "Brightening facial serum with hyaluronic acid.", price: 24.99, category: ProductCategory.beauty, stock: 50, imageUrl: "https://images.unsplash.com/photo-1620916566398-39f1143ab7be" },
+  { name: "Natural Bristle Hair Brush", description: "Detangling brush for smooth, frizz-free hair.", price: 14.99, category: ProductCategory.beauty, stock: 60, imageUrl: "https://images.unsplash.com/photo-1522338242992-e1a54906a8da" },
+
+  { name: "Yoga Mat with Carrying Strap", description: "Extra-thick non-slip yoga mat, eco-friendly material.", price: 27.99, category: ProductCategory.sports, stock: 33, imageUrl: "https://images.unsplash.com/photo-1601925260368-ae2f83cf8b7f" },
+  { name: "Adjustable Dumbbell Set", description: "5-25 lb adjustable dumbbells, space-saving design.", price: 149.99, category: ProductCategory.sports, stock: 10, imageUrl: "https://images.unsplash.com/photo-1638536532686-d610adfc8e5c" },
+
+  { name: "The Midnight Library", description: "A bestselling novel about infinite possibilities and choices.", price: 16.99, category: ProductCategory.books, stock: 40, imageUrl: "https://images.unsplash.com/photo-1544947950-fa07a98d237f" },
+  { name: "Atomic Habits", description: "A guide to building good habits and breaking bad ones.", price: 18.99, category: ProductCategory.books, stock: 38, imageUrl: "https://images.unsplash.com/photo-1512820790803-83ca734da794" },
+];
+
+const seedDatabase = async () => {
+  try {
+    await mongoose.connect(process.env.MONGO_URI as string);
+    console.log("Connected to database for seeding...");
+
+    // Wipe existing products so re-running this script doesn't create duplicates
+    await Product.deleteMany({});
+    console.log("Cleared existing products");
+
+    await Product.insertMany(products);
+    console.log(`Seeded ${products.length} products`);
+
+    // Create a demo admin account, only if one doesn't already exist -
+    // register() always creates role: "user", so this is the only way
+    // to get an admin account without manually editing the database.
+    const existingAdmin = await User.findOne({ email: "admin@novabay.com" });
+
+    if (!existingAdmin) {
+      await User.create({
+        name: "Admin",
+        email: "admin@novabay.com",
+        password: "Admin123!",
+        role: UserRole.admin,
+      });
+      console.log("Created demo admin account: admin@novabay.com / Admin123!");
+    } else {
+      console.log("Admin account already exists, skipped");
+    }
+
+    console.log("Seeding complete!");
+    process.exit(0);
+  } catch (err) {
+    console.error("Seeding failed:", err);
+    process.exit(1);
+  }
+};
+
+seedDatabase();
+</file>
+
+<file path="src/utils/sendEmail.ts">
+import nodemailer from 'nodemailer';
+
+interface EmailOptions {
+  to: string;
+  subject: string;
+  html: string;
+}
+
+export const sendEmail = async ({ to, subject, html }: EmailOptions): Promise<void> => {
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
+
+  await transporter.sendMail({
+    from: `"Nova Bay" <${process.env.EMAIL_USER}>`,
+    to,
+    subject,
+    html,
+  });
+};
+
+export default sendEmail;
+</file>
+
+<file path="src/controllers/paymentController.ts">
+import { Request, Response, NextFunction } from "express";
+import Order from "../models/Order";
+import Product from "../models/Product";
+import Cart from "../models/Cart";
+import stripe from "../config/stripe";
+
+export const createCheckoutSession = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { shippingAddress } = req.body;
+
+    if (!shippingAddress) {
+      return res.status(400).json({ message: "Shipping address is required" });
+    }
+
+    // Pull the cart from the DB instead of trusting a client-sent items array -
+    // this is the actual link between "add to cart" and "checkout" that was missing.
+    const cart = await Cart.findOne({ user: req.user._id });
+
+    if (!cart || cart.items.length === 0) {
+      return res.status(400).json({ message: "Your cart is empty" });
+    }
+
+    const orderItems = [];
+    const lineItems = [];
+    let totalAmount = 0;
+    const decrementedProducts: { productId: string; quantity: number }[] = [];
+
+    for (const cartItem of cart.items) {
+      const productId = cartItem.product.toString();
+      const quantity = cartItem.quantity;
+
+      const updatedProduct = await Product.findOneAndUpdate(
+        { _id: productId, isActive: true, stock: { $gte: quantity } },
+        { $inc: { stock: -quantity } },
+        { new: true }
+      );
+
+      if (!updatedProduct) {
+        // Roll back any stock we already reserved earlier in this loop
+        for (const rollback of decrementedProducts) {
+          await Product.findByIdAndUpdate(rollback.productId, {
+            $inc: { stock: rollback.quantity },
+          });
+        }
+        return res.status(400).json({
+          message: `Product ${productId} is unavailable or doesn't have enough stock`,
+        });
+      }
+
+      decrementedProducts.push({ productId, quantity });
+
+      orderItems.push({
+        product: updatedProduct._id,
+        quantity,
+        price: updatedProduct.price,
+      });
+
+      totalAmount += updatedProduct.price * quantity;
+
+      lineItems.push({
+        price_data: {
+          currency: "usd",
+          product_data: { name: updatedProduct.name },
+          unit_amount: Math.round(updatedProduct.price * 100),
+        },
+        quantity,
+      });
+    }
+
+    const order = await Order.create({
+      user: req.user._id,
+      items: orderItems,
+      totalAmount,
+      shippingAddress,
+    });
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: lineItems,
+      client_reference_id: order._id.toString(),
+      success_url: "http://localhost:3000/order-success",
+      cancel_url: "http://localhost:3000/cart",
+    });
+
+    order.stripeSessionId = session.id;
+    await order.save();
+
+    return res.status(200).json({ url: session.url });
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
+<file path="src/server.ts">
+import dotenv from "dotenv";
+dotenv.config();
+import express, { Express, Request, Response } from 'express';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import morgan from 'morgan';
+import connectDB from './config/db';
+import authRoutes from "./routes/authRoutes";
+import productRoutes from "./routes/productRoutes";
+import orderRoutes from "./routes/orderRoutes";
+import webhookRoutes from "./routes/webhookRoutes";
+import reviewRoutes from "./routes/reviewRoutes";
+import userRoutes from "./routes/userRoutes"
+import cartRoutes from "./routes/cartRoutes"
+import adminRoutes from "./routes/adminRoutes"
+import { errorHandler } from "./middleware/errorMiddleware";
+
+connectDB();
+
+const app: Express = express();
+
+// Morgan goes first so every request is logged, webhook included
+app.use(morgan('dev'));
+
+// Webhook needs raw body for Stripe signature verification (BEFORE express.json)
+app.use("/api/webhook", webhookRoutes);
+
+app.use(cors());
+app.use(express.json());
+app.use(cookieParser());
+
+// Resource Routes
+app.use("/api/auth", authRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/products", productRoutes);
+app.use("/api/orders", orderRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/cart", cartRoutes);
+
+app.get('/', (req: Request, res: Response) => {
+  res.send('API is running...');
+});
+
+// GLOBAL ERROR HANDLER - Must be mounted AFTER all routes & BEFORE app.listen
+app.use(errorHandler);
+
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+});
+</file>
+
+</files>
