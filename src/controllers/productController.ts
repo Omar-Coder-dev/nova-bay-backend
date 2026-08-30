@@ -55,10 +55,7 @@ export const getProducts = async (req: Request, res: Response, next: NextFunctio
 
     const filter: any = { isActive: true };
 
-    // Use case-insensitive regex so 'books', 'BOOKS', and 'Books' all match
-    if (category && category !== "all") {
-      filter.category = { $regex: new RegExp(`^${category}$`, "i") };
-    }
+    if (category) filter.category = category;
 
     if (minPrice !== undefined || maxPrice !== undefined) {
       filter.price = {};
