@@ -84,6 +84,7 @@ src/
       orderEmail.ts
       otpEmail.ts
     AppError.ts
+    cookieOptions.ts
     generateToken.ts
     seed.ts
     sendEmail.ts
@@ -298,225 +299,6 @@ export const getLowStockProducts = async (req: Request, res: Response, next: Nex
       threshold: thresholdNumber,
       count: products.length,
       data: products,
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-</file>
-
-<file path="src/controllers/authController.ts">
-import { Request, Response, NextFunction } from "express";
-import User from "../models/User";
-import bcrypt from "bcryptjs";
-import generateToken from "../utils/generateToken";
-import sendEmail from "../utils/sendEmail";
-import otpEmailTemplate from "../utils/emailTemplates/otpEmail";
-import googleClient from "../config/googleAuth";
-import { AuthProvider } from "../constants/enums";
-
-export const register = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { name, email, password } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: "Name, email, and password are required" });
-    }
-
-    const existingUser = await User.findOne({ email });
-
-    if (existingUser) {
-      return res.status(409).json({ message: "A user with this email already exists" });
-    }
-
-    const user = await User.create({ name, email, password });
-
-    const token = generateToken(user._id.toString());
-
-    return res.status(201).json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      token,
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-export const login = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
-    }
-
-    const user = await User.findOne({ email }).select("+password");
-
-    if (!user || !user.password) {
-      return res.status(401).json({ message: "Invalid email or password" });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-
-    if (!isMatch) {
-      return res.status(401).json({ message: "Invalid email or password" });
-    }
-
-    const token = generateToken(user._id.toString());
-
-    return res.status(200).json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      token,
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-export const getMe = (req: Request, res: Response) => {
-  if (!req.user) {
-    return res.status(401).json({ message: "Not authorized" });
-  }
-
-  return res.status(200).json({
-    _id: req.user._id,
-    name: req.user.name,
-    email: req.user.email,
-    role: req.user.role,
-  });
-};
-
-export const forgotPassword = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ message: "Email is required" });
-    }
-
-    const user = await User.findOne({ email });
-
-    // Generic response whether or not the user exists - same reasoning as login,
-    // don't let attackers figure out which emails are registered
-    if (!user) {
-      return res.status(200).json({ message: "If that email exists, an OTP has been sent" });
-    }
-
-    // generate a random 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-    // hash it before saving - never store the raw OTP, same principle as passwords
-    const hashedOTP = await bcrypt.hash(otp, 10);
-
-    user.resetPasswordOTP = hashedOTP;
-    user.resetPasswordExpires = new Date(Date.now() + 10 * 60 * 1000); // valid for 10 minutes
-
-    await user.save();
-
-    // send the PLAIN otp to the user's email - the hash is only for what we store
-    await sendEmail({
-      to: user.email,
-      subject: "Your Password Reset OTP",
-      html: otpEmailTemplate(otp),
-    });
-
-    return res.status(200).json({ message: "If that email exists, an OTP has been sent" });
-  } catch (err) {
-    next(err);
-  }
-};
-
-export const resetPassword = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { email, otp, newPassword } = req.body;
-
-    if (!email || !otp || !newPassword) {
-      return res.status(400).json({ message: "Email, OTP, and new password are required" });
-    }
-
-    // need to explicitly select these since they're select:false by default
-    const user = await User.findOne({ email }).select("+resetPasswordOTP +resetPasswordExpires");
-
-    if (!user || !user.resetPasswordOTP || !user.resetPasswordExpires) {
-      return res.status(400).json({ message: "Invalid or expired OTP" });
-    }
-
-    // check expiry first - cheap check, avoids unnecessary bcrypt work if already expired
-    if (user.resetPasswordExpires.getTime() < Date.now()) {
-      return res.status(400).json({ message: "Invalid or expired OTP" });
-    }
-
-    const isMatch = await bcrypt.compare(otp, user.resetPasswordOTP);
-
-    if (!isMatch) {
-      return res.status(400).json({ message: "Invalid or expired OTP" });
-    }
-
-    // set the new password - the pre('save') hook will hash it automatically
-    user.password = newPassword;
-
-    // clear the OTP fields so they can't be reused
-    user.resetPasswordOTP = undefined;
-    user.resetPasswordExpires = undefined;
-
-    await user.save();
-
-    return res.status(200).json({ message: "Password reset successful" });
-  } catch (err) {
-    next(err);
-  }
-};
-
-
-export const googleLogin = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { idToken } = req.body;
-
-    if (!idToken) {
-      return res.status(400).json({ message: "Google ID token is required" });
-    }
-
-    const ticket = await googleClient.verifyIdToken({
-      idToken,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
-
-    const payload = ticket.getPayload();
-
-    if (!payload || !payload.email) {
-      return res.status(400).json({ message: "Invalid Google token" });
-    }
-
-    const { email, name, sub: googleId } = payload;
-
-    let user = await User.findOne({ email });
-
-    if (!user) {
-      user = await User.create({
-        name: name || "Google User",
-        email,
-        authProvider: AuthProvider.google,
-        googleId,
-      });
-    } else if (user.authProvider !== AuthProvider.google) {
-      user.googleId = googleId;
-      await user.save();
-    }
-
-    const token = generateToken(user._id.toString());
-
-    return res.status(200).json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      token,
     });
   } catch (err) {
     next(err);
@@ -1545,66 +1327,6 @@ export const handleStripeWebhook = async (req: Request, res: Response) => {
 };
 </file>
 
-<file path="src/middleware/authMiddleware.ts">
-import { Request, Response, NextFunction } from "express";
-import jwt, { JwtPayload } from "jsonwebtoken";
-import User, { IUser } from "../models/User";
-
-// This tells TypeScript that Express's Request object can also carry
-// a "user" property, which we attach ourselves once a token is verified.
-
-declare global {
-  namespace Express {
-    interface Request {
-      user?: IUser;
-    }
-  }
-}
-
-export const protect = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    let token: string | undefined;
-
-    // 1. Look for "Authorization: Bearer <token>" in the request headers
-    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
-      token = req.headers.authorization.split(" ")[1];
-    }
-
-    // 2. No token at all -> reject immediately
-    if (!token) {
-      return res.status(401).json({ message: "Not authorized, no token provided" });
-    }
-
-    // 3. Verify the token is real and not expired
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as JwtPayload;
-
-    // 4. Look up the user this token belongs to
-    const user = await User.findById(decoded.id);
-
-    if (!user) {
-      return res.status(401).json({ message: "Not authorized, user no longer exists" });
-    }
-
-    // 5. Attach the user to the request so later handlers can use it
-    req.user = user;
-
-    // 6. Let the request continue
-    next();
-  } catch (err) {
-    return res.status(401).json({ message: "Not authorized, token invalid" });
-  }
-};
-
-export const restrictTo = (...roles: string[]) => {
-  return (req: Request, res: Response, next: NextFunction) => {
-    if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ message: "You do not have permission to perform this action" });
-    }
-    next();
-  };
-};
-</file>
-
 <file path="src/middleware/errorMiddleware.ts">
 import { Request, Response, NextFunction } from "express";
 import { AppError } from "../utils/AppError";
@@ -2137,24 +1859,6 @@ router.get("/low-stock", getLowStockProducts);
 export default router;
 </file>
 
-<file path="src/routes/authRoutes.ts">
-import { Router } from "express";
-import { forgotPassword, getMe, googleLogin, login, register, resetPassword } from "../controllers/authController";
-import { protect } from "../middleware/authMiddleware";
-import { authLimiter } from "../middleware/rateLimiter";
-
-const router = Router();
-
-router.post("/register", register);
-router.post("/login", authLimiter, login);
-router.post("/google", authLimiter, googleLogin);
-router.post("/forgot-password", authLimiter, forgotPassword);
-router.get("/me", protect, getMe);
-router.post("/reset-password", authLimiter, resetPassword);
-
-export default router;
-</file>
-
 <file path="src/routes/cartRoutes.ts">
 import { Router } from "express";
 import {
@@ -2554,33 +2258,299 @@ const seedDatabase = async () => {
 seedDatabase();
 </file>
 
-<file path="src/utils/sendEmail.ts">
-import nodemailer from 'nodemailer';
+<file path="src/controllers/authController.ts">
+import { Request, Response, NextFunction } from "express";
+import User from "../models/User";
+import bcrypt from "bcryptjs";
+import generateToken from "../utils/generateToken";
+import sendEmail from "../utils/sendEmail";
+import otpEmailTemplate from "../utils/emailTemplates/otpEmail";
+import googleClient from "../config/googleAuth";
+import { AuthProvider } from "../constants/enums";
+import { cookieOptions } from "../utils/cookieOptions";
 
-interface EmailOptions {
-  to: string;
-  subject: string;
-  html: string;
-}
+export const register = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { name, email, password } = req.body;
 
-export const sendEmail = async ({ to, subject, html }: EmailOptions): Promise<void> => {
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "Name, email, and password are required" });
+    }
 
-  await transporter.sendMail({
-    from: `"Nova Bay" <${process.env.EMAIL_USER}>`,
-    to,
-    subject,
-    html,
+    const existingUser = await User.findOne({ email });
+
+    if (existingUser) {
+      return res.status(409).json({ message: "A user with this email already exists" });
+    }
+
+    const user = await User.create({ name, email, password });
+
+    const token = generateToken(user._id.toString());
+    res.cookie("token", token, cookieOptions);
+
+    return res.status(201).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const login = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
+
+    const user = await User.findOne({ email }).select("+password");
+
+    if (!user || !user.password) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    const token = generateToken(user._id.toString());
+    res.cookie("token", token, cookieOptions);
+
+    return res.status(200).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const logout = (req: Request, res: Response) => {
+  res.clearCookie("token", cookieOptions);
+  return res.status(200).json({ message: "Logged out successfully" });
+};
+
+export const getMe = (req: Request, res: Response) => {
+  if (!req.user) {
+    return res.status(401).json({ message: "Not authorized" });
+  }
+
+  return res.status(200).json({
+    _id: req.user._id,
+    name: req.user.name,
+    email: req.user.email,
+    role: req.user.role,
   });
 };
 
-export default sendEmail;
+export const forgotPassword = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(200).json({ message: "If that email exists, an OTP has been sent" });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedOTP = await bcrypt.hash(otp, 10);
+
+    user.resetPasswordOTP = hashedOTP;
+    user.resetPasswordExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+    await user.save();
+
+    await sendEmail({
+      to: user.email,
+      subject: "Your Password Reset OTP",
+      html: otpEmailTemplate(otp),
+    });
+
+    return res.status(200).json({ message: "If that email exists, an OTP has been sent" });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const resetPassword = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ message: "Email, OTP, and new password are required" });
+    }
+
+    const user = await User.findOne({ email }).select("+resetPasswordOTP +resetPasswordExpires");
+
+    if (!user || !user.resetPasswordOTP || !user.resetPasswordExpires) {
+      return res.status(400).json({ message: "Invalid or expired OTP" });
+    }
+
+    if (user.resetPasswordExpires.getTime() < Date.now()) {
+      return res.status(400).json({ message: "Invalid or expired OTP" });
+    }
+
+    const isMatch = await bcrypt.compare(otp, user.resetPasswordOTP);
+
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid or expired OTP" });
+    }
+
+    user.password = newPassword;
+    user.resetPasswordOTP = undefined;
+    user.resetPasswordExpires = undefined;
+
+    await user.save();
+
+    return res.status(200).json({ message: "Password reset successful" });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const googleLogin = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { idToken } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({ message: "Google ID token is required" });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+
+    if (!payload || !payload.email) {
+      return res.status(400).json({ message: "Invalid Google token" });
+    }
+
+    const { email, name, sub: googleId } = payload;
+
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      user = await User.create({
+        name: name || "Google User",
+        email,
+        authProvider: AuthProvider.google,
+        googleId,
+      });
+    } else if (user.authProvider !== AuthProvider.google) {
+      user.googleId = googleId;
+      await user.save();
+    }
+
+    const token = generateToken(user._id.toString());
+    res.cookie("token", token, cookieOptions);
+
+    return res.status(200).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
+<file path="src/middleware/authMiddleware.ts">
+import { Request, Response, NextFunction } from "express";
+import jwt, { JwtPayload } from "jsonwebtoken";
+import User, { IUser } from "../models/User";
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: IUser;
+    }
+  }
+}
+
+export const protect = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    // Token now comes from the httpOnly cookie, not an Authorization header -
+    // cookie-parser puts it on req.cookies automatically since it's mounted in server.ts.
+    const token = req.cookies?.token;
+
+    if (!token) {
+      return res.status(401).json({ message: "Not authorized, no token provided" });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as JwtPayload;
+
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      return res.status(401).json({ message: "Not authorized, user no longer exists" });
+    }
+
+    req.user = user;
+
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: "Not authorized, token invalid" });
+  }
+};
+
+export const restrictTo = (...roles: string[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ message: "You do not have permission to perform this action" });
+    }
+    next();
+  };
+};
+</file>
+
+<file path="src/routes/authRoutes.ts">
+import { Router } from "express";
+import { forgotPassword, getMe, googleLogin, login, logout, register, resetPassword } from "../controllers/authController";
+import { protect } from "../middleware/authMiddleware";
+import { authLimiter } from "../middleware/rateLimiter";
+
+const router = Router();
+
+router.post("/register", register);
+router.post("/login", authLimiter, login);
+router.post("/logout", logout);
+router.post("/google", authLimiter, googleLogin);
+router.post("/forgot-password", authLimiter, forgotPassword);
+router.get("/me", protect, getMe);
+router.post("/reset-password", authLimiter, resetPassword);
+
+export default router;
+</file>
+
+<file path="src/utils/cookieOptions.ts">
+import { CookieOptions } from "express";
+
+const isProduction = process.env.NODE_ENV === "production";
+
+export const cookieOptions: CookieOptions = {
+  httpOnly: true,
+  secure: isProduction, // HTTPS-only in production, plain HTTP allowed in dev
+  sameSite: isProduction ? "none" : "lax", // cross-domain needs "none", localhost works with "lax"
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  path: "/",
+};
 </file>
 
 <file path="src/controllers/paymentController.ts">
@@ -2590,7 +2560,11 @@ import Product from "../models/Product";
 import Cart from "../models/Cart";
 import stripe from "../config/stripe";
 
-export const createCheckoutSession = async (req: Request, res: Response, next: NextFunction) => {
+export const createCheckoutSession = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     if (!req.user) {
       return res.status(401).json({ message: "Not authorized" });
@@ -2622,7 +2596,7 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
       const updatedProduct = await Product.findOneAndUpdate(
         { _id: productId, isActive: true, stock: { $gte: quantity } },
         { $inc: { stock: -quantity } },
-        { new: true }
+        { new: true },
       );
 
       if (!updatedProduct) {
@@ -2669,8 +2643,8 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
       payment_method_types: ["card"],
       line_items: lineItems,
       client_reference_id: order._id.toString(),
-      success_url: "http://localhost:3000/order-success",
-      cancel_url: "http://localhost:3000/cart",
+      success_url: `${process.env.CLIENT_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.CLIENT_URL}/checkout/cancel`,
     });
 
     order.stripeSessionId = session.id;
@@ -2681,6 +2655,38 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
     next(err);
   }
 };
+</file>
+
+<file path="src/utils/sendEmail.ts">
+import { Resend } from "resend";
+
+interface EmailOptions {
+  to: string;
+  subject: string;
+  html: string;
+}
+
+// Resend sends over HTTPS, not raw SMTP - this avoids the port-blocking
+// and timeout issues we hit with Gmail SMTP on Railway.
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+export const sendEmail = async ({ to, subject, html }: EmailOptions): Promise<void> => {
+  const { error } = await resend.emails.send({
+    // Resend's default test sender - works immediately with no domain setup.
+    // Once you verify a real domain on Resend, replace this with
+    // something like "Nova Bay <noreply@novabay.com>".
+    from: "Nova Bay <onboarding@resend.dev>",
+    to,
+    subject,
+    html,
+  });
+
+  if (error) {
+    throw new Error(`Failed to send email: ${error.message}`);
+  }
+};
+
+export default sendEmail;
 </file>
 
 <file path="src/server.ts">
@@ -2705,17 +2711,27 @@ connectDB();
 
 const app: Express = express();
 
-// Morgan goes first so every request is logged, webhook included
+// Railway (and most cloud hosts) sit behind a reverse proxy and add
+// an X-Forwarded-For header with the real client IP. Express doesn't
+// trust that header by default, which made express-rate-limit throw
+// and hang requests using authLimiter (forgot-password, login, etc).
+// This tells Express to trust the first proxy hop, so rate limiting
+// can correctly read the real client IP.
+app.set("trust proxy", 1);
+
 app.use(morgan('dev'));
 
 // Webhook needs raw body for Stripe signature verification (BEFORE express.json)
 app.use("/api/webhook", webhookRoutes);
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.CLIENT_URL,
+  credentials: true,
+}));
+
 app.use(express.json());
 app.use(cookieParser());
 
-// Resource Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/products", productRoutes);
@@ -2728,7 +2744,6 @@ app.get('/', (req: Request, res: Response) => {
   res.send('API is running...');
 });
 
-// GLOBAL ERROR HANDLER - Must be mounted AFTER all routes & BEFORE app.listen
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;

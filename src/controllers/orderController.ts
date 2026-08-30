@@ -131,9 +131,13 @@ export const updateOrderStatus = async (req: Request, res: Response, next: NextF
 
     await order.save();
 
+    const populatedOrder = await Order.findById(order._id)
+      .populate("user", "name email")
+      .populate("items.product", "name price imageUrl");
+
     return res.status(200).json({
       success: true,
-      data: order,
+      data: populatedOrder,
     });
   } catch (err) {
     next(err);
@@ -188,9 +192,14 @@ export const cancelOrder = async (req: Request, res: Response, next: NextFunctio
     order.status = OrderStatus.cancelled;
     await order.save();
 
+    // Re-fetch with population so the frontend gets full product info
+    // (name, price, imageUrl) instead of bare ObjectIds.
+    const populatedOrder = await Order.findById(order._id)
+      .populate("items.product", "name price imageUrl");
+
     return res.status(200).json({
       success: true,
-      data: order,
+      data: populatedOrder,
     });
   } catch (err) {
     next(err);
