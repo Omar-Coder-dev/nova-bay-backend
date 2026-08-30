@@ -19,13 +19,19 @@ connectDB();
 
 const app: Express = express();
 
+// Railway (and most cloud hosts) sit behind a reverse proxy and add
+// an X-Forwarded-For header with the real client IP. Express doesn't
+// trust that header by default, which made express-rate-limit throw
+// and hang requests using authLimiter (forgot-password, login, etc).
+// This tells Express to trust the first proxy hop, so rate limiting
+// can correctly read the real client IP.
+app.set("trust proxy", 1);
+
 app.use(morgan('dev'));
 
 // Webhook needs raw body for Stripe signature verification (BEFORE express.json)
 app.use("/api/webhook", webhookRoutes);
 
-// credentials: true lets the browser send/receive cookies cross-origin.
-// origin MUST be an exact URL (not "*") for credentials to work.
 app.use(cors({
   origin: process.env.CLIENT_URL,
   credentials: true,

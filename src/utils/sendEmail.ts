@@ -1,30 +1,4 @@
-// import nodemailer from 'nodemailer';
-
-// interface EmailOptions {
-//   to: string;
-//   subject: string;
-//   html: string;
-// }
-
-// export const sendEmail = async ({ to, subject, html }: EmailOptions): Promise<void> => {
-//   const transporter = nodemailer.createTransport({
-//     service: 'gmail',
-//     auth: {
-//       user: process.env.EMAIL_USER,
-//       pass: process.env.EMAIL_PASS,
-//     },
-//   });
-
-//   await transporter.sendMail({
-//     from: `"Nova Bay" <${process.env.EMAIL_USER}>`,
-//     to,
-//     subject,
-//     html,
-//   });
-// };
-
-// export default sendEmail;
-import { Resend } from "resend";
+import nodemailer from 'nodemailer';
 
 interface EmailOptions {
   to: string;
@@ -32,26 +6,20 @@ interface EmailOptions {
   html: string;
 }
 
-// Resend sends over HTTPS, not raw SMTP - this avoids the port-blocking
-// issue we hit with Gmail SMTP on Railway.
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 export const sendEmail = async ({ to, subject, html }: EmailOptions): Promise<void> => {
-  const { error } = await resend.emails.send({
-    // Resend's default test sender - works immediately with no domain setup.
-    // Once/if you verify a real domain on Resend, replace this with
-    // something like "Nova Bay <noreply@novabay.com>".
-    from: "Nova Bay <onboarding@resend.dev>",
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
+
+  await transporter.sendMail({
+    from: `"Nova Bay" <${process.env.EMAIL_USER}>`,
     to,
     subject,
     html,
   });
-
-  if (error) {
-    // Throwing here keeps the same behavior as before - the calling
-    // controller's try/catch will still handle failures the same way.
-    throw new Error(`Failed to send email: ${error.message}`);
-  }
 };
 
-export default sendEmail;
