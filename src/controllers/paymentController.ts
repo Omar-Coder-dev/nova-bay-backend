@@ -4,7 +4,11 @@ import Product from "../models/Product";
 import Cart from "../models/Cart";
 import stripe from "../config/stripe";
 
-export const createCheckoutSession = async (req: Request, res: Response, next: NextFunction) => {
+export const createCheckoutSession = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     if (!req.user) {
       return res.status(401).json({ message: "Not authorized" });
@@ -36,7 +40,7 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
       const updatedProduct = await Product.findOneAndUpdate(
         { _id: productId, isActive: true, stock: { $gte: quantity } },
         { $inc: { stock: -quantity } },
-        { new: true }
+        { new: true },
       );
 
       if (!updatedProduct) {
@@ -83,8 +87,8 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
       payment_method_types: ["card"],
       line_items: lineItems,
       client_reference_id: order._id.toString(),
-      success_url: "http://localhost:3000/order-success",
-      cancel_url: "http://localhost:3000/cart",
+      success_url: `${process.env.CLIENT_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.CLIENT_URL}/checkout/cancel`,
     });
 
     order.stripeSessionId = session.id;
