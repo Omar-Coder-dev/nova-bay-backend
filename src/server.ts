@@ -32,10 +32,14 @@ app.use(morgan('dev'));
 // Webhook needs raw body for Stripe signature verification (BEFORE express.json)
 app.use("/api/webhook", webhookRoutes);
 
-app.use(cors({
-  origin: process.env.CLIENT_URL,
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL?.replace(/\/$/, ""),
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 app.use(express.json());
 app.use(cookieParser());
