@@ -2143,20 +2143,6 @@ router.get("/:id/related", getRelatedProducts);
 export default router;
 </file>
 
-<file path="src/utils/cookieOptions.ts">
-import { CookieOptions } from "express";
-
-const isProduction = process.env.NODE_ENV === "production";
-
-export const cookieOptions: CookieOptions = {
-  httpOnly: true,
-  secure: isProduction, // HTTPS-only in production, plain HTTP allowed in dev
-  sameSite: isProduction ? "none" : "lax", // cross-domain needs "none", localhost works with "lax"
-  maxAge: 7 * 24 * 60 * 60 * 1000,
-  path: "/",
-};
-</file>
-
 <file path="src/controllers/authController.ts">
 import { Request, Response, NextFunction } from "express";
 import User from "../models/User";
@@ -2478,6 +2464,20 @@ export const createCheckoutSession = async (
 };
 </file>
 
+<file path="src/utils/cookieOptions.ts">
+import { CookieOptions } from "express";
+
+const isProduction = process.env.NODE_ENV === "production" || process.env.RAILWAY_ENVIRONMENT !== undefined;
+
+export const cookieOptions: CookieOptions = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  path: "/",
+};
+</file>
+
 <file path="src/controllers/productController.ts">
 import Product from "../models/Product";
 import mongoose from "mongoose";
@@ -2785,10 +2785,14 @@ app.use(morgan('dev'));
 // Webhook needs raw body for Stripe signature verification (BEFORE express.json)
 app.use("/api/webhook", webhookRoutes);
 
-app.use(cors({
-  origin: process.env.CLIENT_URL,
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL?.replace(/\/$/, ""),
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 app.use(express.json());
 app.use(cookieParser());

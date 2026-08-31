@@ -1,20 +1,27 @@
 import { Request, Response, NextFunction } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
-import User, { IUser } from "../models/User";
+import User from "../models/User";
 
 declare global {
   namespace Express {
     interface Request {
-      user?: IUser;
+      user?: any;
     }
   }
 }
 
 export const protect = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Token now comes from the httpOnly cookie, not an Authorization header -
-    // cookie-parser puts it on req.cookies automatically since it's mounted in server.ts.
-    const token = req.cookies?.token;
+    let token: string | undefined;
+
+    // Check the Authorization header FIRST - this is the fallback for
+    // mobile browsers that won't reliably send cross-domain cookies.
+    // If it's not there, fall back to the cookie (works fine on desktop).
+    if (req.headers.authorization?.startsWith("Bearer ")) {
+      token = req.headers.authorization.split(" ")[1];
+    } else if (req.cookies?.token) {
+      token = req.cookies.token;
+    }
 
     if (!token) {
       return res.status(401).json({ message: "Not authorized, no token provided" });
@@ -29,7 +36,6 @@ export const protect = async (req: Request, res: Response, next: NextFunction) =
     }
 
     req.user = user;
-
     next();
   } catch (err) {
     return res.status(401).json({ message: "Not authorized, token invalid" });

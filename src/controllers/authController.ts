@@ -8,18 +8,26 @@ import googleClient from "../config/googleAuth";
 import { AuthProvider } from "../constants/enums";
 import { cookieOptions } from "../utils/cookieOptions";
 
-export const register = async (req: Request, res: Response, next: NextFunction) => {
+export const register = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { name, email, password } = req.body;
 
     if (!name || !email || !password) {
-      return res.status(400).json({ message: "Name, email, and password are required" });
+      return res
+        .status(400)
+        .json({ message: "Name, email, and password are required" });
     }
 
     const existingUser = await User.findOne({ email });
 
     if (existingUser) {
-      return res.status(409).json({ message: "A user with this email already exists" });
+      return res
+        .status(409)
+        .json({ message: "A user with this email already exists" });
     }
 
     const user = await User.create({ name, email, password });
@@ -33,18 +41,25 @@ export const register = async (req: Request, res: Response, next: NextFunction) 
       email: user.email,
       role: user.role,
       address: user.address,
+      token, // NEW
     });
   } catch (err) {
     next(err);
   }
 };
 
-export const login = async (req: Request, res: Response, next: NextFunction) => {
+export const login = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
+      return res
+        .status(400)
+        .json({ message: "Email and password are required" });
     }
 
     const user = await User.findOne({ email }).select("+password");
@@ -68,6 +83,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
       email: user.email,
       role: user.role,
       address: user.address,
+      token, // NEW
     });
   } catch (err) {
     next(err);
@@ -93,7 +109,11 @@ export const getMe = (req: Request, res: Response) => {
   });
 };
 
-export const forgotPassword = async (req: Request, res: Response, next: NextFunction) => {
+export const forgotPassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { email } = req.body;
 
@@ -104,7 +124,9 @@ export const forgotPassword = async (req: Request, res: Response, next: NextFunc
     const user = await User.findOne({ email });
 
     if (!user) {
-      return res.status(200).json({ message: "If that email exists, an OTP has been sent" });
+      return res
+        .status(200)
+        .json({ message: "If that email exists, an OTP has been sent" });
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -121,21 +143,31 @@ export const forgotPassword = async (req: Request, res: Response, next: NextFunc
       html: otpEmailTemplate(otp),
     });
 
-    return res.status(200).json({ message: "If that email exists, an OTP has been sent" });
+    return res
+      .status(200)
+      .json({ message: "If that email exists, an OTP has been sent" });
   } catch (err) {
     next(err);
   }
 };
 
-export const resetPassword = async (req: Request, res: Response, next: NextFunction) => {
+export const resetPassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { email, otp, newPassword } = req.body;
 
     if (!email || !otp || !newPassword) {
-      return res.status(400).json({ message: "Email, OTP, and new password are required" });
+      return res
+        .status(400)
+        .json({ message: "Email, OTP, and new password are required" });
     }
 
-    const user = await User.findOne({ email }).select("+resetPasswordOTP +resetPasswordExpires");
+    const user = await User.findOne({ email }).select(
+      "+resetPasswordOTP +resetPasswordExpires",
+    );
 
     if (!user || !user.resetPasswordOTP || !user.resetPasswordExpires) {
       return res.status(400).json({ message: "Invalid or expired OTP" });
@@ -163,7 +195,11 @@ export const resetPassword = async (req: Request, res: Response, next: NextFunct
   }
 };
 
-export const googleLogin = async (req: Request, res: Response, next: NextFunction) => {
+export const googleLogin = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { idToken } = req.body;
 
@@ -207,6 +243,7 @@ export const googleLogin = async (req: Request, res: Response, next: NextFunctio
       email: user.email,
       role: user.role,
       address: user.address,
+      token, // NEW
     });
   } catch (err) {
     next(err);
