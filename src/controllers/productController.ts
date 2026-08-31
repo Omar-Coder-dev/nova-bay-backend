@@ -204,3 +204,34 @@ export const getRelatedProducts = async (req: Request, res: Response, next: Next
     next(err);
   }
 };
+
+export const getHomeProducts = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const products = await Product.find(
+      { isActive: true },
+      {
+        _id: 1,
+        name: 1,
+        price: 1,
+        category: 1,
+        stock: 1,
+        imageUrl: 1,
+        averageRating: 1,
+        numReviews: 1,
+      }
+    )
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    return res.status(200).json({
+      products,
+    });
+  } catch (err) {
+    next(err);
+  }
+};

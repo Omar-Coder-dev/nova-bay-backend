@@ -1884,6 +1884,7 @@ export const register = async (req: Request, res: Response, next: NextFunction) 
       name: user.name,
       email: user.email,
       role: user.role,
+      address: user.address,
     });
   } catch (err) {
     next(err);
@@ -1918,6 +1919,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
       name: user.name,
       email: user.email,
       role: user.role,
+      address: user.address,
     });
   } catch (err) {
     next(err);
@@ -1939,6 +1941,7 @@ export const getMe = (req: Request, res: Response) => {
     name: req.user.name,
     email: req.user.email,
     role: req.user.role,
+    address: req.user.address,
   });
 };
 
@@ -2055,6 +2058,7 @@ export const googleLogin = async (req: Request, res: Response, next: NextFunctio
       name: user.name,
       email: user.email,
       role: user.role,
+      address: user.address,
     });
   } catch (err) {
     next(err);
@@ -2272,6 +2276,192 @@ export const cancelOrder = async (req: Request, res: Response, next: NextFunctio
 };
 </file>
 
+<file path="src/middleware/authMiddleware.ts">
+import { Request, Response, NextFunction } from "express";
+import jwt, { JwtPayload } from "jsonwebtoken";
+import User, { IUser } from "../models/User";
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: IUser;
+    }
+  }
+}
+
+export const protect = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    // Token now comes from the httpOnly cookie, not an Authorization header -
+    // cookie-parser puts it on req.cookies automatically since it's mounted in server.ts.
+    const token = req.cookies?.token;
+
+    if (!token) {
+      return res.status(401).json({ message: "Not authorized, no token provided" });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as JwtPayload;
+
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      return res.status(401).json({ message: "Not authorized, user no longer exists" });
+    }
+
+    req.user = user;
+
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: "Not authorized, token invalid" });
+  }
+};
+
+export const restrictTo = (...roles: string[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ message: "You do not have permission to perform this action" });
+    }
+    next();
+  };
+};
+</file>
+
+<file path="src/routes/authRoutes.ts">
+import { Router } from "express";
+import { forgotPassword, getMe, googleLogin, login, logout, register, resetPassword } from "../controllers/authController";
+import { protect } from "../middleware/authMiddleware";
+import { authLimiter } from "../middleware/rateLimiter";
+
+const router = Router();
+
+router.post("/register", register);
+router.post("/login", authLimiter, login);
+router.post("/logout", logout);
+router.post("/google", authLimiter, googleLogin);
+router.post("/forgot-password", authLimiter, forgotPassword);
+router.get("/me", protect, getMe);
+router.post("/reset-password", authLimiter, resetPassword);
+
+export default router;
+</file>
+
+<file path="src/utils/cookieOptions.ts">
+import { CookieOptions } from "express";
+
+const isProduction = process.env.NODE_ENV === "production";
+
+export const cookieOptions: CookieOptions = {
+  httpOnly: true,
+  secure: isProduction, // HTTPS-only in production, plain HTTP allowed in dev
+  sameSite: isProduction ? "none" : "lax", // cross-domain needs "none", localhost works with "lax"
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  path: "/",
+};
+</file>
+
+<file path="src/controllers/paymentController.ts">
+import { Request, Response, NextFunction } from "express";
+import Order from "../models/Order";
+import Product from "../models/Product";
+import Cart from "../models/Cart";
+import stripe from "../config/stripe";
+
+export const createCheckoutSession = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
+
+    const { shippingAddress } = req.body;
+
+    if (!shippingAddress) {
+      return res.status(400).json({ message: "Shipping address is required" });
+    }
+
+    // Pull the cart from the DB instead of trusting a client-sent items array -
+    // this is the actual link between "add to cart" and "checkout" that was missing.
+    const cart = await Cart.findOne({ user: req.user._id });
+
+    if (!cart || cart.items.length === 0) {
+      return res.status(400).json({ message: "Your cart is empty" });
+    }
+
+    const orderItems = [];
+    const lineItems = [];
+    let totalAmount = 0;
+    const decrementedProducts: { productId: string; quantity: number }[] = [];
+
+    for (const cartItem of cart.items) {
+      const productId = cartItem.product.toString();
+      const quantity = cartItem.quantity;
+
+      const updatedProduct = await Product.findOneAndUpdate(
+        { _id: productId, isActive: true, stock: { $gte: quantity } },
+        { $inc: { stock: -quantity } },
+        { new: true },
+      );
+
+      if (!updatedProduct) {
+        // Roll back any stock we already reserved earlier in this loop
+        for (const rollback of decrementedProducts) {
+          await Product.findByIdAndUpdate(rollback.productId, {
+            $inc: { stock: rollback.quantity },
+          });
+        }
+        return res.status(400).json({
+          message: `Product ${productId} is unavailable or doesn't have enough stock`,
+        });
+      }
+
+      decrementedProducts.push({ productId, quantity });
+
+      orderItems.push({
+        product: updatedProduct._id,
+        quantity,
+        price: updatedProduct.price,
+      });
+
+      totalAmount += updatedProduct.price * quantity;
+
+      lineItems.push({
+        price_data: {
+          currency: "usd",
+          product_data: { name: updatedProduct.name },
+          unit_amount: Math.round(updatedProduct.price * 100),
+        },
+        quantity,
+      });
+    }
+
+    const order = await Order.create({
+      user: req.user._id,
+      items: orderItems,
+      totalAmount,
+      shippingAddress,
+    });
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: lineItems,
+      client_reference_id: order._id.toString(),
+      success_url: `${process.env.CLIENT_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.CLIENT_URL}/checkout/cancel`,
+    });
+
+    order.stripeSessionId = session.id;
+    await order.save();
+
+    return res.status(200).json({ url: session.url });
+  } catch (err) {
+    next(err);
+  }
+};
+</file>
+
 <file path="src/controllers/productController.ts">
 import Product from "../models/Product";
 import mongoose from "mongoose";
@@ -2475,192 +2665,6 @@ export const getRelatedProducts = async (req: Request, res: Response, next: Next
     }).limit(4);
 
     return res.status(200).json(relatedProducts);
-  } catch (err) {
-    next(err);
-  }
-};
-</file>
-
-<file path="src/middleware/authMiddleware.ts">
-import { Request, Response, NextFunction } from "express";
-import jwt, { JwtPayload } from "jsonwebtoken";
-import User, { IUser } from "../models/User";
-
-declare global {
-  namespace Express {
-    interface Request {
-      user?: IUser;
-    }
-  }
-}
-
-export const protect = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    // Token now comes from the httpOnly cookie, not an Authorization header -
-    // cookie-parser puts it on req.cookies automatically since it's mounted in server.ts.
-    const token = req.cookies?.token;
-
-    if (!token) {
-      return res.status(401).json({ message: "Not authorized, no token provided" });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as JwtPayload;
-
-    const user = await User.findById(decoded.id);
-
-    if (!user) {
-      return res.status(401).json({ message: "Not authorized, user no longer exists" });
-    }
-
-    req.user = user;
-
-    next();
-  } catch (err) {
-    return res.status(401).json({ message: "Not authorized, token invalid" });
-  }
-};
-
-export const restrictTo = (...roles: string[]) => {
-  return (req: Request, res: Response, next: NextFunction) => {
-    if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ message: "You do not have permission to perform this action" });
-    }
-    next();
-  };
-};
-</file>
-
-<file path="src/routes/authRoutes.ts">
-import { Router } from "express";
-import { forgotPassword, getMe, googleLogin, login, logout, register, resetPassword } from "../controllers/authController";
-import { protect } from "../middleware/authMiddleware";
-import { authLimiter } from "../middleware/rateLimiter";
-
-const router = Router();
-
-router.post("/register", register);
-router.post("/login", authLimiter, login);
-router.post("/logout", logout);
-router.post("/google", authLimiter, googleLogin);
-router.post("/forgot-password", authLimiter, forgotPassword);
-router.get("/me", protect, getMe);
-router.post("/reset-password", authLimiter, resetPassword);
-
-export default router;
-</file>
-
-<file path="src/utils/cookieOptions.ts">
-import { CookieOptions } from "express";
-
-const isProduction = process.env.NODE_ENV === "production";
-
-export const cookieOptions: CookieOptions = {
-  httpOnly: true,
-  secure: isProduction, // HTTPS-only in production, plain HTTP allowed in dev
-  sameSite: isProduction ? "none" : "lax", // cross-domain needs "none", localhost works with "lax"
-  maxAge: 7 * 24 * 60 * 60 * 1000,
-  path: "/",
-};
-</file>
-
-<file path="src/controllers/paymentController.ts">
-import { Request, Response, NextFunction } from "express";
-import Order from "../models/Order";
-import Product from "../models/Product";
-import Cart from "../models/Cart";
-import stripe from "../config/stripe";
-
-export const createCheckoutSession = async (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ message: "Not authorized" });
-    }
-
-    const { shippingAddress } = req.body;
-
-    if (!shippingAddress) {
-      return res.status(400).json({ message: "Shipping address is required" });
-    }
-
-    // Pull the cart from the DB instead of trusting a client-sent items array -
-    // this is the actual link between "add to cart" and "checkout" that was missing.
-    const cart = await Cart.findOne({ user: req.user._id });
-
-    if (!cart || cart.items.length === 0) {
-      return res.status(400).json({ message: "Your cart is empty" });
-    }
-
-    const orderItems = [];
-    const lineItems = [];
-    let totalAmount = 0;
-    const decrementedProducts: { productId: string; quantity: number }[] = [];
-
-    for (const cartItem of cart.items) {
-      const productId = cartItem.product.toString();
-      const quantity = cartItem.quantity;
-
-      const updatedProduct = await Product.findOneAndUpdate(
-        { _id: productId, isActive: true, stock: { $gte: quantity } },
-        { $inc: { stock: -quantity } },
-        { new: true },
-      );
-
-      if (!updatedProduct) {
-        // Roll back any stock we already reserved earlier in this loop
-        for (const rollback of decrementedProducts) {
-          await Product.findByIdAndUpdate(rollback.productId, {
-            $inc: { stock: rollback.quantity },
-          });
-        }
-        return res.status(400).json({
-          message: `Product ${productId} is unavailable or doesn't have enough stock`,
-        });
-      }
-
-      decrementedProducts.push({ productId, quantity });
-
-      orderItems.push({
-        product: updatedProduct._id,
-        quantity,
-        price: updatedProduct.price,
-      });
-
-      totalAmount += updatedProduct.price * quantity;
-
-      lineItems.push({
-        price_data: {
-          currency: "usd",
-          product_data: { name: updatedProduct.name },
-          unit_amount: Math.round(updatedProduct.price * 100),
-        },
-        quantity,
-      });
-    }
-
-    const order = await Order.create({
-      user: req.user._id,
-      items: orderItems,
-      totalAmount,
-      shippingAddress,
-    });
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
-      line_items: lineItems,
-      client_reference_id: order._id.toString(),
-      success_url: `${process.env.CLIENT_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.CLIENT_URL}/checkout/cancel`,
-    });
-
-    order.stripeSessionId = session.id;
-    await order.save();
-
-    return res.status(200).json({ url: session.url });
   } catch (err) {
     next(err);
   }

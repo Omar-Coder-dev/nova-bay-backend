@@ -32,6 +32,7 @@ export const register = async (req: Request, res: Response, next: NextFunction) 
       name: user.name,
       email: user.email,
       role: user.role,
+      address: user.address,
     });
   } catch (err) {
     next(err);
@@ -66,6 +67,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
       name: user.name,
       email: user.email,
       role: user.role,
+      address: user.address,
     });
   } catch (err) {
     next(err);
@@ -87,6 +89,7 @@ export const getMe = (req: Request, res: Response) => {
     name: req.user.name,
     email: req.user.email,
     role: req.user.role,
+    address: req.user.address,
   });
 };
 
@@ -203,6 +206,7 @@ export const googleLogin = async (req: Request, res: Response, next: NextFunctio
       name: user.name,
       email: user.email,
       role: user.role,
+      address: user.address,
     });
   } catch (err) {
     next(err);
