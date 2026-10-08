@@ -1,4 +1,4 @@
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
 interface EmailOptions {
   to: string;
@@ -6,22 +6,25 @@ interface EmailOptions {
   html: string;
 }
 
-// Resend sends over HTTPS, not raw SMTP - this avoids the port-blocking
-// and timeout issues we hit with Gmail SMTP on Railway.
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Create a reusable transporter using Gmail SMTP
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER, // Your Gmail address
+    pass: process.env.EMAIL_PASS, // Your 16-character App Password
+  },
+});
 
 export const sendEmail = async ({ to, subject, html }: EmailOptions): Promise<void> => {
-  const { error } = await resend.emails.send({
-    // Resend's default test sender - works immediately with no domain setup.
-    // Once you verify a real domain on Resend, replace this with
-    // something like "Nova Bay <noreply@novabay.com>".
-    from: "Nova Bay <onboarding@resend.dev>",
-    to,
-    subject,
-    html,
-  });
-
-  if (error) {
+  try {
+    // CRITICAL FOR VERCEL: Always await sendMail so the serverless function doesn't freeze prematurely
+    await transporter.sendMail({
+      from: `"Nova Bay" <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      html,
+    });
+  } catch (error: any) {
     throw new Error(`Failed to send email: ${error.message}`);
   }
 };

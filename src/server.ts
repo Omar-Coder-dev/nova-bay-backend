@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 dotenv.config();
-import express, { Express, Request, Response } from 'express';
+import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
@@ -10,23 +10,14 @@ import productRoutes from "./routes/productRoutes";
 import orderRoutes from "./routes/orderRoutes";
 import webhookRoutes from "./routes/webhookRoutes";
 import reviewRoutes from "./routes/reviewRoutes";
-import userRoutes from "./routes/userRoutes"
-import cartRoutes from "./routes/cartRoutes"
-import adminRoutes from "./routes/adminRoutes"
+import userRoutes from "./routes/userRoutes";
+import cartRoutes from "./routes/cartRoutes";
+import adminRoutes from "./routes/adminRoutes";
 import { errorHandler } from "./middleware/errorMiddleware";
-
-connectDB();
 
 const app: Express = express();
 
-// Railway (and most cloud hosts) sit behind a reverse proxy and add
-// an X-Forwarded-For header with the real client IP. Express doesn't
-// trust that header by default, which made express-rate-limit throw
-// and hang requests using authLimiter (forgot-password, login, etc).
-// This tells Express to trust the first proxy hop, so rate limiting
-// can correctly read the real client IP.
 app.set("trust proxy", 1);
-
 app.use(morgan('dev'));
 
 // Webhook needs raw body for Stripe signature verification (BEFORE express.json)
@@ -44,6 +35,16 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
+// Serverless DB Connection Middleware
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/products", productRoutes);
@@ -60,6 +61,10 @@ app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
-});
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+  });
+}
+
+export default app;
