@@ -36,13 +36,8 @@ export const handleStripeWebhook = async (req: Request, res: Response) => {
       order.stripePaymentId = session.payment_intent as string;
       await order.save();
 
-      // Payment actually succeeded now - THIS is the correct moment to clear
-      // the cart, not when checkout started. If we cleared it earlier and the
-      // user abandoned payment, they'd lose their cart contents for nothing.
+      // Clear the user's cart in the database now that payment succeeded
       await Cart.findOneAndUpdate({ user: order.user }, { items: [] });
-
-      // NOTE: stock was already decremented in createCheckoutSession at order creation.
-      // Do NOT decrement again here - that would double-charge inventory for one order.
 
       const populatedOrder = await Order.findById(order._id)
         .populate("user", "name email")
@@ -65,11 +60,17 @@ export const handleStripeWebhook = async (req: Request, res: Response) => {
           estimatedDelivery: populatedOrder.estimatedDelivery,
         });
 
-        sendEmail({
-          to: user.email,
-          subject: `Order Confirmation #${populatedOrder._id}`,
-          html,
-        }).catch((err) => console.error("Failed to send order email:", err));
+        // CRITICAL FOR VERCEL SERVERLESS:
+        // Must await sendEmail so Vercel doesn't kill the function before SMTP completes
+        try {
+          await sendEmail({
+            to: user.email,
+            subject: `Order Confirmation #${populatedOrder._id}`,
+            html,
+          });
+        } catch (err) {
+          console.error("Failed to send order email:", err);
+        }
       }
     }
   }
@@ -80,9 +81,6 @@ export const handleStripeWebhook = async (req: Request, res: Response) => {
     const order = await Order.findOne({ stripeSessionId: session.id });
 
     if (order && order.status === OrderStatus.pending) {
-      // Customer abandoned checkout - give back the stock that was
-      // reserved/decremented when the order was first created.
-      // The cart was never touched, so nothing needs restoring there.
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.product, {
           $inc: { stock: item.quantity },
