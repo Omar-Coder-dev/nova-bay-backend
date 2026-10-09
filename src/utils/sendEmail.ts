@@ -6,18 +6,19 @@ interface EmailOptions {
   html: string;
 }
 
-// Create a reusable transporter using Gmail SMTP
+// Explicit SSL configuration on port 465 prevents Vercel network timeouts
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true,
   auth: {
-    user: process.env.EMAIL_USER, // Your Gmail address
-    pass: process.env.EMAIL_PASS, // Your 16-character App Password
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
   },
 });
 
 export const sendEmail = async ({ to, subject, html }: EmailOptions): Promise<void> => {
   try {
-    // CRITICAL FOR VERCEL: Always await sendMail so the serverless function doesn't freeze prematurely
     await transporter.sendMail({
       from: `"Nova Bay" <${process.env.EMAIL_USER}>`,
       to,
@@ -25,6 +26,7 @@ export const sendEmail = async ({ to, subject, html }: EmailOptions): Promise<vo
       html,
     });
   } catch (error: any) {
+    console.error("Nodemailer Error Details:", error);
     throw new Error(`Failed to send email: ${error.message}`);
   }
 };
